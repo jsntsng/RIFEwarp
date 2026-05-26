@@ -1,0 +1,38 @@
+# ─── Virtual environment (rebuild from requirements.txt) ───
+venv/
+.venv/
+env/
+
+# ─── Python caches ───────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyo
+*.egg-info/
+.pytest_cache/
+
+# ─── Model weights / checkpoints (large; distribute separately) ───
+*.pth
+*.pt
+*.ckpt
+*.onnx
+*.safetensors
+*.bin
+
+# ─── Media / renders / scratch output ─────────────
+*.mp4
+*.mov
+*.avi
+*.exr
+*.dpx
+output/
+outputs/
+tmp/
+temp/
+
+# ─── Editor / OS cruft ────────────────────────────
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*.pkl

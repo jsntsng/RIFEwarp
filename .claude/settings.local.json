@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python3 -m py_compile ui/sequence_viewer.py)",
+      "Bash(python3 -m py_compile ui/io_panel.py)"
+    ]
+  }
+}
