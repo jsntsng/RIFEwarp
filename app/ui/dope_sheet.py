@@ -496,7 +496,7 @@ class DopeSheet(QWidget):
         # Match settings_panel tooltip styling for consistency
         self.setStyleSheet(
             "QToolTip{background:#1e1e22;color:#ffffff;"
-            "border:1px solid #4a9eff;font-family:monospace;font-size:10px;}")
+            "border:1px solid #4a9eff;font-family:monospace;font-size:9pt;}")
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
@@ -512,7 +512,7 @@ class DopeSheet(QWidget):
         ib.addStretch()   # leading stretch — centers the control cluster
 
         self._kp_label = QLabel("0 keys")
-        self._kp_label.setStyleSheet("color:#6a6a72; font-size:10px; min-width:40px;")
+        self._kp_label.setStyleSheet("color:#6a6a72; font-size:9pt; min-width:40px;")
         ib.addWidget(self._kp_label)
 
         sep = QFrame(); sep.setFrameShape(QFrame.Shape.VLine)
@@ -520,7 +520,7 @@ class DopeSheet(QWidget):
         ib.addWidget(sep)
 
         lbl_in = QLabel("X")
-        lbl_in.setStyleSheet("color:#6a6a72; font-size:10px;")
+        lbl_in.setStyleSheet("color:#6a6a72; font-size:9pt;")
         lbl_in.setToolTip("X \u2014 output (timeline) frame")
         ib.addWidget(lbl_in)
 
@@ -528,7 +528,7 @@ class DopeSheet(QWidget):
         self._in_input.setFixedWidth(54)
         self._in_input.setStyleSheet(
             "background:#1e1e21; border:1px solid #3a3a40; color:#e8e8ec;"
-            "font-family:monospace; font-size:10px; padding:1px 4px;")
+            "font-family:monospace; font-size:9pt; padding:1px 4px;")
         self._in_input.setPlaceholderText("--")
         self._in_input.setReadOnly(True)
         self._in_input.setToolTip(
@@ -538,11 +538,11 @@ class DopeSheet(QWidget):
         ib.addWidget(self._in_input)
 
         arr = QLabel("\u00b7")
-        arr.setStyleSheet("color:#3a3a40; font-size:10px;")
+        arr.setStyleSheet("color:#3a3a40; font-size:9pt;")
         ib.addWidget(arr)
 
         lbl_out = QLabel("Y")
-        lbl_out.setStyleSheet("color:#6a6a72; font-size:10px;")
+        lbl_out.setStyleSheet("color:#6a6a72; font-size:9pt;")
         lbl_out.setToolTip("Y \u2014 source (in) frame")
         ib.addWidget(lbl_out)
 
@@ -550,7 +550,7 @@ class DopeSheet(QWidget):
         self._out_input.setFixedWidth(54)
         self._out_input.setStyleSheet(
             "background:#1e1e21; border:1px solid #3a3a40; color:#e8e8ec;"
-            "font-family:monospace; font-size:10px; padding:1px 4px;")
+            "font-family:monospace; font-size:9pt; padding:1px 4px;")
         self._out_input.setPlaceholderText("--")
         self._out_input.setReadOnly(True)
         self._out_input.setToolTip(
@@ -565,12 +565,12 @@ class DopeSheet(QWidget):
 
         BTN_ADD = (
             "QPushButton{background:#1a2a1a;border:1px solid #3ecf6e;"
-            "color:#3ecf6e;font-family:monospace;font-size:13px;padding:0 6px;}"
+            "color:#3ecf6e;font-family:monospace;font-size:11pt;padding:0 6px;}"
             "QPushButton:hover{background:#243a24;}"
         )
         BTN_DEL = (
             "QPushButton{background:#2a1a1a;border:1px solid #e04a4a;"
-            "color:#e04a4a;font-family:monospace;font-size:13px;padding:0 6px;}"
+            "color:#e04a4a;font-family:monospace;font-size:11pt;padding:0 6px;}"
             "QPushButton:hover{background:#3a2424;}"
         )
 

@@ -14,7 +14,7 @@ from core.sequence import scan_sequence, SequenceInfo
 
 # Match settings_panel tooltip styling for consistency
 TT = ("QToolTip{background:#1e1e22;color:#ffffff;"
-      "border:1px solid #4a9eff;font-family:monospace;font-size:10px;}")
+      "border:1px solid #4a9eff;font-family:monospace;font-size:9pt;}")
 
 
 def parse_frame_range(text: str):
@@ -144,7 +144,7 @@ class IOPanel(QWidget):
         # RAM cache fill — driven by the viewer's background preloader.
         self._cache_label = QLabel("–")
         self._cache_label.setStyleSheet(
-            "color:#3a3a42; font-family:monospace; font-size:9px;")
+            "color:#3a3a42; font-family:monospace; font-size:8pt;")
         form.addRow("Cache", self._cache_label)
 
         in_layout.addLayout(form)
@@ -174,7 +174,7 @@ class IOPanel(QWidget):
         self.full_path_label = QLabel("")
         self.full_path_label.setWordWrap(True)
         self.full_path_label.setStyleSheet(
-            "color:#4a9eff; font-size:9px; font-family:monospace;"
+            "color:#4a9eff; font-size:8pt; font-family:monospace;"
             "background:#111113; border-left:2px solid #4a9eff;"
             "padding:3px 6px; margin-top:1px;")
         out_layout.addWidget(self.full_path_label)
@@ -226,7 +226,7 @@ class IOPanel(QWidget):
 
         self.out_range_status = QLabel("")
         self.out_range_status.setStyleSheet(
-            "color:#6a6a72; font-family:monospace; font-size:9px;")
+            "color:#6a6a72; font-family:monospace; font-size:8pt;")
         out_form.addRow("", self.out_range_status)
 
         self.out_count_label = QLabel("~? frames")
@@ -311,7 +311,7 @@ class IOPanel(QWidget):
                 "QLineEdit{border:1px solid #e04a4a;background:#2a1818;}")
             self.out_range_status.setText(err)
             self.out_range_status.setStyleSheet(
-                "color:#e04a4a; font-family:monospace; font-size:9px;")
+                "color:#e04a4a; font-family:monospace; font-size:8pt;")
         else:
             # Valid — show frame count and compact form
             self.out_range.setStyleSheet(
@@ -321,7 +321,7 @@ class IOPanel(QWidget):
                 f"{n} frame{'s' if n != 1 else ''}  "
                 f"[{min(frames)}\u2013{max(frames)}]")
             self.out_range_status.setStyleSheet(
-                "color:#3ecf6e; font-family:monospace; font-size:9px;")
+                "color:#3ecf6e; font-family:monospace; font-size:8pt;")
 
     def get_out_range_text(self) -> str:
         """Raw text of the frame range field, stripped."""
@@ -344,13 +344,17 @@ class IOPanel(QWidget):
         if total <= 0:
             self._cache_label.setText("–")
             self._cache_label.setStyleSheet(
-                "color:#3a3a42; font-family:monospace; font-size:9px;")
+                "color:#3a3a42; font-family:monospace; font-size:8pt;")
             return
         pct   = int(n * 100 / total)
         color = "#3ecf6e" if n >= total else "#f5a623" if n > 0 else "#3a3a42"
         self._cache_label.setStyleSheet(
-            f"color:{color}; font-family:monospace; font-size:9px;")
+            f"color:{color}; font-family:monospace; font-size:8pt;")
         self._cache_label.setText(f"cached {n}/{total}  ({pct}%)")
+
+    def has_sequence(self) -> bool:
+        """True when a valid image sequence is currently loaded in the input directory."""
+        return self._in_seq is not None
 
     def get_in_dir(self):     return self.in_dir.text().strip()
     def get_out_dir(self):

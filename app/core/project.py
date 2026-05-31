@@ -2,7 +2,8 @@
 from __future__ import annotations
 import json
 
-PROJECT_VERSION = 1
+# Bumped from 1 to 2 when snapshots replaced the top-level curve/in_point/out_point.
+PROJECT_VERSION = 2
 
 
 def save_project(path: str, data: dict):
@@ -19,8 +20,15 @@ def load_project(path: str) -> dict:
 def collect_project(main_window) -> dict:
     io  = main_window.io_panel
     st  = main_window.settings_panel
-    ce  = main_window.curve_editor
     qp  = main_window.queue_panel
+
+    # Mirror the live scrubber in/out into the active snapshot before saving so
+    # the persisted snapshot reflects the user's current marker positions.
+    snaps = main_window.snapshots
+    active = snaps.active()
+    active.in_point  = main_window.viewer.scrubber.inPoint()
+    active.out_point = main_window.viewer.scrubber.outPoint()
+    snap_data = snaps.to_dict()
 
     return {
         "input": {
@@ -36,9 +44,11 @@ def collect_project(main_window) -> dict:
             "prefix":    io.out_prefix.text().strip(), # raw prefix without period
             "padding":   io.get_out_padding(),
         },
-        "curve":     ce.curve.to_dict(),
-        "in_point":  main_window.viewer.scrubber.inPoint(),
-        "out_point": main_window.viewer.scrubber.outPoint(),
+        "snapshots":          snap_data["snapshots"],
+        "active_snapshot_id": snap_data["active_snapshot_id"],
+        # Shared Frame/TC display mode (one of "Frame", "TC (metadata)", "TC (fps)").
+        # Both the viewer's and curve editor's dropdowns mirror this value.
+        "display_mode":       getattr(main_window, "_display_mode", "Frame"),
         "settings": {
             "model_name":     st.get_model_name(),
             "model":          st.get_model_name(),
@@ -51,34 +61,60 @@ def collect_project(main_window) -> dict:
         },
         "queue": [
             {
-                "name":       job.name,
-                "in_dir":     job.in_dir,
-                "in_prefix":  job.in_prefix,
-                "in_padding": job.in_padding,
-                "in_ext":     job.in_ext,
-                "in_start":   job.in_start,
-                "in_end":     job.in_end,
-                "out_dir":    job.out_dir,
-                "out_prefix": job.out_prefix,
-                "out_padding":job.out_padding,
-                "out_ext":    job.out_ext,
-                "out_start":  job.out_start,
-                "curve":      job.curve.to_dict(),
-                "model_name": job.model_name,
-                "scale":      job.scale,
-                "status":     job.status.value,
+                "job_id":         job.job_id,
+                "name":           job.name,
+                "in_dir":         job.in_dir,
+                "in_prefix":      job.in_prefix,
+                "in_padding":     job.in_padding,
+                "in_ext":         job.in_ext,
+                "in_start":       job.in_start,
+                "in_end":         job.in_end,
+                "out_dir":        job.out_dir,
+                "out_prefix":     job.out_prefix,
+                "out_padding":    job.out_padding,
+                "out_ext":        job.out_ext,
+                "out_start":      job.out_start,
+                "curve":          job.curve.to_dict(),
+                "model_name":     job.model_name,
+                "scale":          job.scale,
+                "status":         job.status.value,
+                # Snapshot identity captured at queue time — frozen strings.
+                "snapshot_name":  job.snapshot_name,
+                "snapshot_color": job.snapshot_color,
             }
             for job in qp.jobs
         ],
     }
 
 
-def apply_project(main_window, data: dict):
+def _build_snapshot_collection(data: dict, io_in_start: int, io_in_end: int):
+    """Build a SnapshotCollection from project data, applying a legacy shim
+    when the file pre-dates the snapshots schema."""
+    from core.snapshot import SnapshotCollection, Snapshot
     from core.timewarp import TimewarpCurve
 
+    if "snapshots" in data:
+        return SnapshotCollection.from_dict({
+            "snapshots":          data["snapshots"],
+            "active_snapshot_id": data.get("active_snapshot_id"),
+        })
+
+    # Legacy v1: synthesize one "default" snapshot from top-level curve/in/out.
+    if "curve" in data:
+        curve = TimewarpCurve.from_dict(data["curve"])
+    else:
+        curve = TimewarpCurve()
+        curve.set_range(io_in_start, io_in_end, io_in_start)
+        curve.reset(1.0)
+    in_pt  = int(data.get("in_point",  io_in_start))
+    out_pt = int(data.get("out_point", io_in_end))
+    snap = Snapshot(curve=curve, in_point=in_pt, out_point=out_pt, name="default")
+    return SnapshotCollection(snapshots=[snap], active_id=snap.id)
+
+
+def apply_project(main_window, data: dict):
     io  = main_window.io_panel
     st  = main_window.settings_panel
-    ce  = main_window.curve_editor
 
     inp = data.get("input", {})
     out = data.get("output", {})
@@ -118,26 +154,30 @@ def apply_project(main_window, data: dict):
     # Call _on_sequence_changed first so the range is set correctly
     main_window._on_sequence_changed()
 
-    # Restore in/out points
-    if "in_point"  in data: main_window.viewer.scrubber.setInPoint(data["in_point"])
-    if "out_point" in data: main_window.viewer.scrubber.setOutPoint(data["out_point"])
+    # Restore snapshots AFTER _on_sequence_changed so they're not reset.
+    in_start_now = io.get_in_start()
+    in_end_now   = io.get_in_end()
 
-    # Restore curve AFTER _on_sequence_changed so it doesn't get reset
-    if "curve" in data:
-        curve = TimewarpCurve.from_dict(data["curve"])
-        in_start = io.get_in_start()
-        in_end   = io.get_in_end()
-        # Preserve saved range if sequence not found on disk
-        if in_start == 1001 and in_end == 1072 and curve.in_start != 1001:
-            in_start = curve.in_start
-            in_end   = curve.in_end
-        curve.set_range(in_start, in_end, in_start)
-        # Set on both curve editor canvas and dope sheet — same object
-        ce.canvas.curve = curve
-        ce.canvas._selected_frames = set()
-        ce._kp_label.setText(f"{len(curve.keypoints)} keys")
-        ce._update_info_bar()
-        ce.canvas.reset_view()
-        ce.canvas.update()
-        main_window.dope_sheet.set_curve(curve)
-        main_window._on_curve_changed()
+    snaps = _build_snapshot_collection(data, in_start_now, in_end_now)
+
+    # Re-range each snapshot's curve to the current sequence when one is loaded,
+    # otherwise keep the saved range. has_sequence() is the canonical check —
+    # it avoids the old value-comparison sentinel (1001/1072) that collided
+    # with genuine 1001-1072 sequences on disk.
+    has_seq = main_window.io_panel.has_sequence()
+    for snap in snaps.snapshots:
+        if has_seq:
+            c_in_start = in_start_now
+            c_in_end   = in_end_now
+        else:
+            c_in_start = snap.curve.in_start
+            c_in_end   = snap.curve.in_end
+        snap.curve.set_range(c_in_start, c_in_end, c_in_start)
+
+    main_window.set_snapshots(snaps)
+
+    # Restore the shared display mode. Back-compat: pre-Brief files lack this
+    # key and load as "Frame". set_display_mode dedupes — no signal emit when
+    # the loaded mode matches what's already live.
+    if hasattr(main_window, "set_display_mode"):
+        main_window.set_display_mode(data.get("display_mode", "Frame"))

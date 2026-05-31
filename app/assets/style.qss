@@ -2,7 +2,7 @@ QMainWindow, QWidget {
     background-color: #0e0e0f;
     color: #c8c8cc;
     font-family: "JetBrains Mono", "Hack", "Fira Mono", "DejaVu Sans Mono", monospace;
-    font-size: 11px;
+    font-size: 10pt;
 }
 QMenuBar {
     background-color: #161618;
@@ -25,7 +25,7 @@ QGroupBox {
     border-radius: 3px;
     margin-top: 16px;
     padding-top: 6px;
-    font-size: 10px;
+    font-size: 9pt;
     letter-spacing: 1px;
     color: #6a6a72;
 }
@@ -54,7 +54,7 @@ QComboBox {
     color: #c8c8cc;
     padding: 3px 4px 3px 6px;
     min-width: 0px;
-    font-size: 10px;
+    font-size: 9pt;
 }
 QComboBox:hover { border-color: #3a3a40; }
 QComboBox:focus { border-color: #4a9eff; }
@@ -78,6 +78,9 @@ QComboBox QAbstractItemView {
     border: 1px solid #3a3a40;
     color: #c8c8cc;
     selection-background-color: #2d4a6e;
+}
+QComboBox QAbstractItemView::item:disabled {
+    color: #5a5a5e;
 }
 QPushButton {
     background-color: #1e1e21;
@@ -129,7 +132,7 @@ QHeaderView::section {
     border-right: 1px solid #2a2a2e;
     border-bottom: 1px solid #2a2a2e;
     padding: 4px 6px;
-    font-size: 10px;
+    font-size: 9pt;
     letter-spacing: 1px;
 }
 QProgressBar {
@@ -138,7 +141,7 @@ QProgressBar {
     border-radius: 2px;
     color: #a0a0aa;
     text-align: center;
-    font-size: 10px;
+    font-size: 9pt;
     height: 14px;
 }
 QProgressBar::chunk { background-color: #2d4a6e; border-radius: 1px; }
@@ -148,13 +151,13 @@ QTextEdit#logView {
     border-top: 1px solid #1e1e21;
     color: #6a6a72;
     font-family: "JetBrains Mono", "Hack", "Fira Mono", monospace;
-    font-size: 10px;
+    font-size: 9pt;
     padding: 4px;
 }
-QLabel#statusLabel { color: #6a6a72; font-size: 10px; }
+QLabel#statusLabel { color: #6a6a72; font-size: 9pt; }
 QLabel#tagLabel {
     color: #4a9eff;
-    font-size: 10px;
+    font-size: 9pt;
     border: 1px solid #2d4a6e;
     padding: 1px 5px;
     background: rgba(74,158,255,0.08);
@@ -163,7 +166,7 @@ QStatusBar {
     background-color: #161618;
     border-top: 1px solid #2a2a2e;
     color: #6a6a72;
-    font-size: 10px;
+    font-size: 9pt;
     padding: 2px 8px;
 }
-QFormLayout QLabel { color: #6a6a72; font-size: 10px; }
+QFormLayout QLabel { color: #6a6a72; font-size: 9pt; }

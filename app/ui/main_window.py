@@ -7,13 +7,16 @@ import copy
 from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QHBoxLayout, QVBoxLayout,
     QSplitter, QToolBar, QLabel, QPushButton,
-    QStatusBar, QMessageBox, QTabWidget, QStackedWidget
+    QStatusBar, QMessageBox, QTabWidget, QStackedWidget,
+    QLineEdit, QSpinBox, QDoubleSpinBox, QTextEdit, QPlainTextEdit,
+    QApplication, QComboBox,
 )
-from PyQt6.QtCore import Qt, QSettings
-from PyQt6.QtGui import QAction, QKeySequence, QColor
+from PyQt6.QtCore import Qt, QSettings, pyqtSignal
+from PyQt6.QtGui import QAction, QKeySequence, QColor, QShortcut
 from PyQt6.QtCore import QPointF
 
-from core.timewarp import TimewarpCurve, InterpMode, Keypoint
+from core.timewarp import TimewarpCurve
+from core.snapshot import SnapshotCollection, Snapshot
 from core.project import save_project, load_project, collect_project, apply_project
 from ui.curve_editor import CurveEditor
 from ui.io_panel import IOPanel
@@ -21,11 +24,25 @@ from ui.settings_panel import SettingsPanel
 from ui.queue_panel import QueuePanel, RetimeJob
 from ui.sequence_viewer import SequenceViewer
 from ui.dope_sheet import DopeSheet
+from ui.snapshot_panel import SnapshotPanel
 
 
 class MainWindow(QMainWindow):
+    # Project-level frame/TC display mode. Both the viewer's dropdown and the
+    # curve editor's dropdown read from / write to this single source of truth.
+    # See set_display_mode() — emits on actual change only (deduped).
+    displayModeChanged          = pyqtSignal(str)
+    # Mirrors the viewer's "TC (metadata) available" probe result. Curve editor's
+    # dropdown listens to this to enable/disable its TC (metadata) entry in
+    # lockstep with the viewer's.
+    tcMetadataAvailableChanged  = pyqtSignal(bool)
+
     def __init__(self):
         super().__init__()
+        # Shared display mode state — initialised before any panel is built so
+        # panels can read it during their own __init__.
+        self._display_mode: str = "Frame"
+        self._tc_metadata_available: bool = False
         try:
             import pathlib
             _ver = pathlib.Path(__file__).parent.parent.parent / "VERSION"
@@ -37,12 +54,29 @@ class MainWindow(QMainWindow):
         self.setMinimumSize(1280, 800)
         self._current_project_path = None
 
+        # Snapshots: start with a single default snapshot wrapping the curve
+        # editor's initial curve, so the panel is never empty.
+        self.snapshots = SnapshotCollection()
+        self._suppress_scrubber_mirror = False
+
         self._build_menu()
         self._build_central()
         self._build_toolbar()
         self._build_statusbar()
         self._restore_geometry()
         self._detect_gpu()
+
+        # Seed the snapshot collection with the curve_editor's initial curve so
+        # the active snapshot and the canvas share the exact same object.
+        initial_curve = self.curve_editor.curve
+        initial = Snapshot(
+            curve=initial_curve,
+            in_point=self.viewer.scrubber.inPoint(),
+            out_point=self.viewer.scrubber.outPoint(),
+            name="default",
+        )
+        self.snapshots = SnapshotCollection(snapshots=[initial], active_id=initial.id)
+        self.snapshot_panel.set_snapshots(self.snapshots)
 
         self.queue_panel._add_to_queue_cb = self._add_to_queue
 
@@ -54,6 +88,36 @@ class MainWindow(QMainWindow):
         self.dope_sheet.curveChanged.connect(self._on_dope_changed)
         self.dope_sheet.playheadMoved.connect(self._on_dope_playhead_moved)
 
+        # Mirror scrubber in/out into the active snapshot so they persist
+        # across snapshot switches and project save.
+        self.viewer.scrubber.inPointChanged.connect(self._mirror_in_point)
+        self.viewer.scrubber.outPointChanged.connect(self._mirror_out_point)
+
+        # Snapshot panel signals
+        self.snapshot_panel.activeChanged.connect(self._on_active_snapshot_changed)
+
+        # Shared display-mode wiring. Viewer and curve editor each have a
+        # dropdown; both route their user-changes through MainWindow's
+        # set_display_mode, and both subscribe to displayModeChanged to apply
+        # the new mode locally. tcMetadataAvailableChanged fans out to the
+        # curve editor's combo so its TC (metadata) entry mirrors the viewer's
+        # enable/disable state.
+        self.viewer.displayModeUserChanged.connect(self.set_display_mode)
+        self.viewer.tcMetadataAvailableUserChanged.connect(
+            self.set_tc_metadata_available)
+        self.displayModeChanged.connect(self.viewer.apply_display_mode)
+        self.displayModeChanged.connect(self.curve_editor.apply_display_mode)
+        self.tcMetadataAvailableChanged.connect(
+            self.curve_editor.apply_tc_metadata_available)
+        # Click-on-disabled-mode feedback. Qt swallows clicks on disabled combo
+        # items; both panels surface them as disabledModeClicked(text), which we
+        # turn into a transient status-bar message.
+        self.viewer.disabledModeClicked.connect(self._on_disabled_mode_clicked)
+        self.curve_editor.disabledModeClicked.connect(self._on_disabled_mode_clicked)
+        # Initial knob-formatter wiring (no signal needed — direct apply).
+        self.curve_editor.apply_display_mode(self._display_mode)
+        self.curve_editor.apply_tc_metadata_available(self._tc_metadata_available)
+
         # Wire dope sheet undo/redo through curve editor's stack
         canvas = self.curve_editor.canvas
         self.dope_sheet._undo_cb     = canvas.undo
@@ -62,6 +126,15 @@ class MainWindow(QMainWindow):
 
         # Wire viewer range zoom to curve editor and dope sheet
         self.viewer.btn_range_zoom.clicked.connect(self._on_range_zoom_changed)
+
+        # PageUp / PageDown — cycle snapshots when focus is in the snapshot
+        # panel or curve editor area, but never while editing text.
+        self._sc_next = QShortcut(QKeySequence(Qt.Key.Key_PageDown), self)
+        self._sc_next.setContext(Qt.ShortcutContext.ApplicationShortcut)
+        self._sc_next.activated.connect(lambda: self._cycle_snapshot(+1))
+        self._sc_prev = QShortcut(QKeySequence(Qt.Key.Key_PageUp), self)
+        self._sc_prev.setContext(Qt.ShortcutContext.ApplicationShortcut)
+        self._sc_prev.activated.connect(lambda: self._cycle_snapshot(-1))
 
         self._on_sequence_changed()
 
@@ -188,7 +261,7 @@ class MainWindow(QMainWindow):
         h_splitter.setStretchFactor(0, 0)
         h_splitter.setStretchFactor(1, 1)
         h_splitter.setStretchFactor(2, 0)
-        h_splitter.setSizes([360, 9999, 360])
+        h_splitter.setSizes([420, 9999, 420])
         outer_v.addWidget(h_splitter)
 
         bottom_widget = QWidget()
@@ -209,13 +282,13 @@ class MainWindow(QMainWindow):
         self._bottom_active_style = (
             "QPushButton{background:rgba(74,158,255,0.15);"
             "border:none;border-left:2px solid #4a9eff;"
-            "color:#4a9eff;font-family:monospace;font-size:13px;"
+            "color:#4a9eff;font-family:monospace;font-size:11pt;"
             "letter-spacing:1px;padding:10px 2px;}"
         )
         self._bottom_inactive_style = (
             "QPushButton{background:transparent;border:none;"
             "border-left:2px solid transparent;color:#4a4a52;"
-            "font-family:monospace;font-size:13px;letter-spacing:2px;"
+            "font-family:monospace;font-size:11pt;letter-spacing:2px;"
             "padding:10px 2px;}"
             "QPushButton:hover{color:#a0a0aa;border-left:2px solid #3a3a40;}"
         )
@@ -241,7 +314,7 @@ class MainWindow(QMainWindow):
             "QTabWidget::pane{border:none;border-top:1px solid #2a2a2e;}"
             "QTabBar::tab{background:#161618;border:1px solid #2a2a2e;"
             "border-bottom:none;color:#6a6a72;font-family:monospace;"
-            "font-size:10px;letter-spacing:1px;padding:4px 14px;margin-right:2px;}"
+            "font-size:9pt;letter-spacing:1px;padding:4px 14px;margin-right:2px;}"
             "QTabBar::tab:selected{background:#1e1e21;color:#e8e8ec;"
             "border-top:1px solid #4a9eff;}"
             "QTabBar::tab:hover{background:#1e1e21;color:#a0a0aa;}"
@@ -254,7 +327,18 @@ class MainWindow(QMainWindow):
         self.dope_sheet = DopeSheet()
         curve_tabs.addTab(self.dope_sheet, "DOPE SHEET")
 
-        self._bottom_stack.addWidget(curve_tabs)
+        # Curve area + snapshot panel side by side. Snapshot panel sizing
+        # mirrors the top-right settings panel (min 180px, initial 420px).
+        self.snapshot_panel = SnapshotPanel()
+        self.snapshot_panel.setMinimumWidth(180)
+        curve_split = QSplitter(Qt.Orientation.Horizontal)
+        curve_split.addWidget(curve_tabs)
+        curve_split.addWidget(self.snapshot_panel)
+        curve_split.setStretchFactor(0, 1)
+        curve_split.setStretchFactor(1, 0)
+        curve_split.setSizes([9999, 420])
+
+        self._bottom_stack.addWidget(curve_split)
 
         self.queue_panel = QueuePanel()
         self._bottom_stack.addWidget(self.queue_panel)
@@ -302,17 +386,19 @@ class MainWindow(QMainWindow):
     def _on_sequence_changed(self):
         in_start = self.io_panel.get_in_start()
         in_end   = self.io_panel.get_in_end()
-        n_in     = max(1, in_end - in_start + 1)
 
         curve = self.curve_editor.curve
         range_changed = (curve.in_start != in_start or curve.in_end != in_end)
-        curve.set_range(in_start, in_end, in_start)
+
+        # Update every snapshot's curve range metadata so the editor's x-axis
+        # tracks the source sequence. Keypoints are deliberately untouched —
+        # a sequence change must never destroy user curve data, even when the
+        # new range is smaller and some keypoints end up off-canvas. They
+        # persist in snap.curve.keypoints and reappear if the range widens.
+        for snap in self.snapshots.snapshots:
+            snap.curve.set_range(in_start, in_end, in_start)
 
         if range_changed:
-            curve.keypoints = [
-                Keypoint(out_frame=0,             in_frame=0,             interp=InterpMode.SMOOTH),
-                Keypoint(out_frame=float(n_in-1), in_frame=float(n_in-1), interp=InterpMode.SMOOTH),
-            ]
             self.curve_editor.canvas.reset_view()
 
         self.curve_editor.canvas.update()
@@ -392,6 +478,17 @@ class MainWindow(QMainWindow):
         # Snapshot the frame range field — locked into the job at queue time
         range_text = self.io_panel.get_out_range_text()
         range_set  = self.io_panel.get_out_range_set()  # None if empty/invalid
+
+        # Snapshot identity stamp — captured at queue time, frozen strings.
+        # Defensive ""/None fallback in case the collection is empty (shouldn't
+        # happen given the >=1 invariant, but cheap insurance).
+        snap_name = ""
+        snap_color = None
+        if len(self.snapshots) > 0:
+            active = self.snapshots.active()
+            snap_name = active.name
+            snap_color = active.color
+
         job = RetimeJob(
             name=name,
             in_dir=in_dir,
@@ -418,6 +515,8 @@ class MainWindow(QMainWindow):
             scene_cut=self.settings_panel.get_scene_cut(),
             frame_range_str=range_text,
             frame_range_set=range_set,
+            snapshot_name=snap_name,
+            snapshot_color=snap_color,
         )
         self.queue_panel.add_job(job)
         self._switch_bottom_panel(1)
@@ -549,6 +648,115 @@ class MainWindow(QMainWindow):
             canvas._undo_stack.pop(0)
         canvas._redo_stack.clear()
 
+    # ── Display mode (shared between viewer and curve editor) ────────────────
+
+    def display_mode(self) -> str:
+        return self._display_mode
+
+    def set_display_mode(self, mode: str):
+        """Single source of truth. Dedup'd; emits only on actual change."""
+        if mode not in ("Frame", "TC (metadata)", "TC (fps)"):
+            return
+        if mode == self._display_mode:
+            return
+        self._display_mode = mode
+        self.displayModeChanged.emit(mode)
+
+    def tc_metadata_available(self) -> bool:
+        return self._tc_metadata_available
+
+    def set_tc_metadata_available(self, available: bool):
+        """Mirrors the viewer's TC-probe result. Dedup'd."""
+        available = bool(available)
+        if available == self._tc_metadata_available:
+            return
+        self._tc_metadata_available = available
+        self.tcMetadataAvailableChanged.emit(available)
+
+    def _on_disabled_mode_clicked(self, mode_text: str):
+        """Either dropdown reported a click on a disabled item. Post a one-shot
+        status-bar message explaining why it can't be selected right now."""
+        if mode_text == "TC (metadata)":
+            msg = ("TC (metadata) not available "
+                   "— this sequence has no embedded timecode.")
+        else:
+            msg = f"{mode_text} is not available for this sequence."
+        self.status_bar.showMessage(msg, 4000)
+
+    # ── Snapshots ─────────────────────────────────────────────────────────────
+
+    def set_snapshots(self, snaps: SnapshotCollection):
+        """Replace the live snapshot collection (called by project load).
+        Binds the panel and fans out to all dependent UI."""
+        self.snapshots = snaps
+        self.snapshot_panel.set_snapshots(snaps)
+        self._bind_active_snapshot()
+
+    def _bind_active_snapshot(self):
+        """Point the curve editor, dope sheet, and viewer at the active
+        snapshot's data. Resets undo (cross-snapshot undo is confusing)."""
+        snap = self.snapshots.active()
+        # Bind curve to editor and dope sheet — same TimewarpCurve instance.
+        self.curve_editor.set_curve(snap.curve)
+        self.dope_sheet.set_curve(snap.curve)
+        canvas = self.curve_editor.canvas
+        canvas._undo_stack.clear()
+        canvas._redo_stack.clear()
+        canvas.reset_view()
+        # Restore scrubber in/out without re-mirroring back into the snapshot.
+        self._suppress_scrubber_mirror = True
+        try:
+            self.viewer.scrubber.setInPoint(snap.in_point)
+            self.viewer.scrubber.setOutPoint(snap.out_point)
+        finally:
+            self._suppress_scrubber_mirror = False
+        # Refresh derived UI (output frame count, dope sheet, viewer frame map).
+        self._on_curve_changed()
+
+    def _on_active_snapshot_changed(self):
+        self._bind_active_snapshot()
+
+    def _mirror_in_point(self, v: int):
+        if self._suppress_scrubber_mirror:
+            return
+        try:
+            self.snapshots.active().in_point = int(v)
+        except RuntimeError:
+            pass
+
+    def _mirror_out_point(self, v: int):
+        if self._suppress_scrubber_mirror:
+            return
+        try:
+            self.snapshots.active().out_point = int(v)
+        except RuntimeError:
+            pass
+
+    def _cycle_snapshot(self, direction: int):
+        """PageUp/PageDown handler. Bails out if the focus widget is a text-
+        entry field, so typing in a QLineEdit / spin box doesn't cycle."""
+        fw = QApplication.focusWidget()
+        TEXT_TYPES = (QLineEdit, QSpinBox, QDoubleSpinBox,
+                      QTextEdit, QPlainTextEdit)
+        if isinstance(fw, TEXT_TYPES):
+            return
+        # An editable QComboBox embeds a QLineEdit; the isinstance check above
+        # catches that QLineEdit when focus is on the combo's edit field.
+        if isinstance(fw, QComboBox) and fw.isEditable():
+            return
+        # Limit positive scope to "inside snapshot panel or curve editor".
+        if fw is not None:
+            w = fw
+            in_scope = False
+            while w is not None:
+                if w is self.snapshot_panel or w is self.curve_editor:
+                    in_scope = True
+                    break
+                w = w.parentWidget()
+            if not in_scope:
+                return
+        self.snapshot_panel.cycle(direction)
+
     def _show_about(self):
         QMessageBox.about(self, "About RIFEwarp",
             f"<b>RIFEwarp</b> v{self._version}<br><br>"
@@ -628,6 +836,16 @@ class MainWindow(QMainWindow):
         self.queue_panel.table.setRowCount(0)
         self.queue_panel.log_view.clear()
         self.queue_panel._update_summary()
+        # Reset snapshots to a single fresh default that points at the curve
+        # editor's current curve object (which _on_sequence_changed will reset).
+        default = Snapshot(
+            curve=self.curve_editor.curve,
+            in_point=self.viewer.scrubber.inPoint(),
+            out_point=self.viewer.scrubber.outPoint(),
+            name="default",
+        )
+        self.snapshots = SnapshotCollection(snapshots=[default], active_id=default.id)
+        self.snapshot_panel.set_snapshots(self.snapshots)
         # Reset curve and viewer
         self._on_sequence_changed()
 
@@ -641,6 +859,14 @@ class MainWindow(QMainWindow):
     def _open_project_path(self, path: str):
         try:
             data = load_project(path)
+            # Clear queue BEFORE applying — mirrors _new_project. Without this,
+            # the previous project's jobs survive into the loaded one (audit
+            # Finding 2). Order matters: any signals fired during apply_project
+            # must not see stale queue state.
+            self.queue_panel.jobs.clear()
+            self.queue_panel.table.setRowCount(0)
+            self.queue_panel.log_view.clear()
+            self.queue_panel._update_summary()
             apply_project(self, data)
             self._current_project_path = path
             self.setWindowTitle(f"RIFEwarp v{self._version} — {os.path.basename(path)}")
@@ -700,7 +926,9 @@ class MainWindow(QMainWindow):
             in_start = self.io_panel.get_in_start()
             in_end   = self.io_panel.get_in_end()
             curve.set_range(in_start, in_end, in_start)
-            # Set curve on editor and dope sheet
+            # Replace the active snapshot's curve in place so the snapshot list
+            # stays intact.
+            self.snapshots.active().curve = curve
             self.curve_editor.set_curve(curve)
             self.dope_sheet.set_curve(curve)
             self.curve_editor.canvas.reset_view()

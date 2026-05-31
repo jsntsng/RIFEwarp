@@ -9,7 +9,7 @@ from typing import Optional, Set, List
 
 from PyQt6.QtWidgets import (
     QWidget, QSizePolicy, QMenu, QVBoxLayout, QHBoxLayout,
-    QLabel, QLineEdit, QFrame, QPushButton, QComboBox
+    QLabel, QLineEdit, QFrame, QPushButton, QComboBox, QMessageBox
 )
 from PyQt6.QtCore import Qt, QPointF, QRectF, pyqtSignal
 from PyQt6.QtGui import (
@@ -79,6 +79,210 @@ INTERP_KP_COLOR = {
     InterpMode.CONSTANT: C_CURVE_CONST,
     InterpMode.SMOOTH:   C_KP,                       # legacy alias
 }
+
+
+class TangentIconButton(QPushButton):
+    """QPushButton that paints a line-art icon instead of a text glyph.
+
+    Accepts a `mode` string that dispatches to one of the icon-paint methods.
+    The standard button chrome (background, border, hover/pressed) is rendered
+    by `super().paintEvent` from the parent's QSS; the icon is drawn on top
+    with QPainter.Antialiasing in a 24×24 design space centered in the button.
+    """
+
+    # Design space side length; all icon coordinates are in [0, DS)×[0, DS).
+    DS = 24.0
+
+    def __init__(self, mode: str, parent=None):
+        super().__init__("", parent)
+        self._mode = mode
+
+    def paintEvent(self, event):
+        # 1. Standard chrome from QSS (background, border, hover, pressed).
+        super().paintEvent(event)
+
+        # 2. Icon on top.
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+
+        # Scale so DS units fit inside (w-2) × (h-2) — 1px margin each side.
+        margin = 1.0
+        scale = min(self.width() - 2 * margin, self.height() - 2 * margin) / self.DS
+        # Translate so design origin (0, 0) maps to top-left of the scaled icon,
+        # with the icon centred in the button.
+        tx = (self.width()  - self.DS * scale) / 2.0
+        ty = (self.height() - self.DS * scale) / 2.0
+
+        p.save()
+        p.translate(tx, ty)
+        p.scale(scale, scale)
+
+        # Derive stroke color from QSS palette text colour (matches +/×/↺).
+        text_color = self.palette().color(self.foregroundRole())
+        stroke = QPen(text_color)
+        stroke.setWidthF(1.2)
+        stroke.setCapStyle(Qt.PenCapStyle.RoundCap)
+        stroke.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+
+        if self._mode == "break":
+            self._paint_break(p, stroke)
+        elif self._mode == "auto":
+            self._paint_auto(p, stroke)
+
+        p.restore()
+        p.end()
+
+    def _paint_break(self, p: QPainter, stroke: QPen):
+        """Dotted V with keypoint at (12,16), tips at (4,8) and (20,8)."""
+        # Dotted lines for the V arms.
+        dot_pen = QPen(stroke)
+        dot_pen.setDashPattern([0, 3])
+        dot_pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+        p.setPen(dot_pen)
+        p.drawLine(QPointF(12, 16), QPointF(4, 8))
+        p.drawLine(QPointF(12, 16), QPointF(20, 8))
+
+        # Filled dots at keypoint and handle tips.
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(QBrush(stroke.color()))
+        p.drawEllipse(QPointF(12, 16), 1.4, 1.4)  # keypoint
+        p.drawEllipse(QPointF(4, 8),   1.0, 1.0)  # left tip
+        p.drawEllipse(QPointF(20, 8),  1.0, 1.0)  # right tip
+
+    def _paint_auto(self, p: QPainter, stroke: QPen):
+        """Smooth S-curve through keypoint (12,12); no handle dots."""
+        # Bezier curve.
+        path = QPainterPath()
+        path.moveTo(4, 18)
+        path.cubicTo(10, 18, 14, 6, 20, 6)
+        stroke_curve = QPen(stroke)
+        stroke_curve.setDashPattern([])   # solid
+        p.setPen(stroke_curve)
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        p.drawPath(path)
+
+        # Keypoint dot.
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(QBrush(stroke.color()))
+        p.drawEllipse(QPointF(12, 12), 1.4, 1.4)
+
+
+class YKnob(QWidget):
+    """Flame-style horizontal-drag scrubber for the selected keypoint's Y
+    value (in_frame). Renders the value as text via an externally-supplied
+    formatter so the display mode (Frame / TC) is decided by the parent.
+
+    Mouse model: press anchors a baseline value, mouse-move emits
+    ``valueScrubbing(float)`` with the live value (no integer rounding) so the
+    curve can repaint mid-drag, and release emits ``dragFinished(int)`` exactly
+    once with the final rounded value. The parent is responsible for capturing
+    one undo entry on ``dragStarted`` and committing per-keypoint deltas.
+
+    Modifiers (held at drag start):
+      plain  →  1 frame per pixel (Flame default).
+      Shift  →  0.1 frame per pixel (fine).
+      Ctrl   →  10 frames per pixel (coarse).
+    """
+    dragStarted     = pyqtSignal()
+    valueScrubbing  = pyqtSignal(float)
+    dragFinished    = pyqtSignal(int)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._value: "float | None" = None         # None = no selection / mixed
+        self._formatter = lambda v: ("--" if v is None else str(int(round(v))))
+        self._dragging  = False
+        self._press_x   = 0
+        self._press_val = 0.0
+        self._live_val  = 0.0
+        self._scale     = 1.0                       # frames per pixel
+        # Match Y line edit's height; width sized so a full TC string
+        # ("00:00:00:00") fits without truncation. The brief asked for a
+        # square — see deviations note — but TC text won't fit at 22 px.
+        self.setFixedHeight(22)
+        self.setFixedWidth(120)
+        self.setCursor(Qt.CursorShape.SizeHorCursor)
+        self.setMouseTracking(False)
+        self.setToolTip(
+            "Scrubber for the selected keyframe.\n"
+            "Click-drag horizontally to change the source (in) frame.\n"
+            "  plain  1 frame per pixel\n"
+            "  Shift  0.1 frame per pixel\n"
+            "  Ctrl   10 frames per pixel\n"
+            "Updates live; one undo entry per drag.")
+
+    # ── Public API ────────────────────────────────────────────────────────────
+
+    def set_value(self, v):
+        """Set the displayed value. None = no selection / mixed → shows '--'."""
+        self._value = (None if v is None else float(v))
+        self.update()
+
+    def value(self):
+        return self._value
+
+    def set_formatter(self, fn):
+        """Install a value→str formatter (Frame / TC / etc.). Triggers repaint."""
+        self._formatter = fn
+        self.update()
+
+    # ── Paint ─────────────────────────────────────────────────────────────────
+
+    def paintEvent(self, _ev):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        # Background + border — match the Y line edit's chrome.
+        border = QColor("#4a9eff") if self._dragging else QColor("#3a3a40")
+        p.setBrush(QColor("#1e1e21"))
+        p.setPen(QPen(border, 1))
+        from PyQt6.QtCore import QRectF as _QRectF
+        p.drawRoundedRect(_QRectF(0.5, 0.5, self.width()-1, self.height()-1), 2.0, 2.0)
+        # Text
+        if self._dragging and self._value is not None:
+            txt = self._formatter(self._live_val)
+        else:
+            txt = self._formatter(self._value)
+        p.setPen(QColor("#e8e8ec") if self._value is not None else QColor("#6a6a72"))
+        # Use the widget's own font (inherits the panel monospace).
+        p.drawText(self.rect(),
+                   int(Qt.AlignmentFlag.AlignCenter), txt)
+        p.end()
+
+    # ── Mouse model ───────────────────────────────────────────────────────────
+
+    def mousePressEvent(self, ev):
+        if ev.button() != Qt.MouseButton.LeftButton or self._value is None:
+            return
+        self._dragging  = True
+        self._press_x   = int(ev.position().x())
+        self._press_val = float(self._value)
+        self._live_val  = self._press_val
+        mods = ev.modifiers()
+        if mods & Qt.KeyboardModifier.ShiftModifier:
+            self._scale = 0.1
+        elif mods & Qt.KeyboardModifier.ControlModifier:
+            self._scale = 10.0
+        else:
+            self._scale = 1.0
+        self.update()
+        self.dragStarted.emit()
+
+    def mouseMoveEvent(self, ev):
+        if not self._dragging:
+            return
+        dx = int(ev.position().x()) - self._press_x
+        self._live_val = self._press_val + dx * self._scale
+        self.update()
+        self.valueScrubbing.emit(self._live_val)
+
+    def mouseReleaseEvent(self, ev):
+        if not self._dragging or ev.button() != Qt.MouseButton.LeftButton:
+            return
+        self._dragging = False
+        final = int(round(self._live_val))
+        self._value = float(final)
+        self.update()
+        self.dragFinished.emit(final)
 
 
 class CurveCanvas(QWidget):
@@ -1171,13 +1375,22 @@ class CurveCanvas(QWidget):
 class CurveEditor(QWidget):
     curveChanged  = pyqtSignal()
     playheadMoved = pyqtSignal(int)
+    # Fired when the user clicks a disabled item in the display-mode dropdown.
+    # Qt swallows clicks on disabled items silently — we surface them as a
+    # signal so MainWindow can post status-bar feedback.
+    disabledModeClicked = pyqtSignal(str)
 
     def __init__(self, parent=None):
         super().__init__(parent)
+        # Knob drag state — initialised before any widget is built so handlers
+        # can reference it safely even if a stray signal fires during init.
+        self._y_knob: "YKnob | None" = None
+        self._knob_drag_baselines: dict = {}
+        self._knob_drag_baseval: "float | None" = None
         # Match settings_panel tooltip styling for consistency
         self.setStyleSheet(
             "QToolTip{background:#1e1e22;color:#ffffff;"
-            "border:1px solid #4a9eff;font-family:monospace;font-size:10px;}")
+            "border:1px solid #4a9eff;font-family:monospace;font-size:9pt;}")
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
@@ -1189,18 +1402,18 @@ class CurveEditor(QWidget):
         ib.setContentsMargins(8, 2, 8, 2)
         ib.setSpacing(8)
 
-        ib.addStretch()   # leading stretch — centers the control cluster
+        # Layout: [keypoint group flush left] [stretch] [Interpolation] [stretch].
+        # With the keypoint group on the left and nothing on the right, the two
+        # equal-weight stretches land Interpolation closer to visual center.
+
+        # ── Keypoint info group (flush left) ─────────────────────────────────
 
         self._kp_label = QLabel("2 keys")
-        self._kp_label.setStyleSheet("color:#6a6a72; font-size:10px; min-width:40px;")
+        self._kp_label.setStyleSheet("color:#6a6a72; font-size:9pt; min-width:40px;")
         ib.addWidget(self._kp_label)
 
-        sep = QFrame(); sep.setFrameShape(QFrame.Shape.VLine)
-        sep.setStyleSheet("color:#2a2a2e; margin:0 6px;")
-        ib.addWidget(sep)
-
         lbl_in = QLabel("X")
-        lbl_in.setStyleSheet("color:#6a6a72; font-size:10px;")
+        lbl_in.setStyleSheet("color:#6a6a72; font-size:9pt;")
         lbl_in.setToolTip("X \u2014 output (timeline) frame")
         ib.addWidget(lbl_in)
 
@@ -1208,7 +1421,7 @@ class CurveEditor(QWidget):
         self._in_input.setFixedWidth(54)
         self._in_input.setStyleSheet(
             "background:#1e1e21; border:1px solid #3a3a40; color:#e8e8ec;"
-            "font-family:monospace; font-size:10px; padding:1px 4px;")
+            "font-family:monospace; font-size:9pt; padding:1px 4px;")
         self._in_input.setPlaceholderText("--")
         self._in_input.setToolTip(
             "Output (timeline) frame for the selected keyframe.\n"
@@ -1219,11 +1432,11 @@ class CurveEditor(QWidget):
         ib.addWidget(self._in_input)
 
         arr = QLabel("\u00b7")
-        arr.setStyleSheet("color:#3a3a40; font-size:10px;")
+        arr.setStyleSheet("color:#3a3a40; font-size:9pt;")
         ib.addWidget(arr)
 
         lbl_out = QLabel("Y")
-        lbl_out.setStyleSheet("color:#6a6a72; font-size:10px;")
+        lbl_out.setStyleSheet("color:#6a6a72; font-size:9pt;")
         lbl_out.setToolTip("Y \u2014 source (in) frame")
         ib.addWidget(lbl_out)
 
@@ -1231,7 +1444,7 @@ class CurveEditor(QWidget):
         self._out_input.setFixedWidth(54)
         self._out_input.setStyleSheet(
             "background:#1e1e21; border:1px solid #3a3a40; color:#e8e8ec;"
-            "font-family:monospace; font-size:10px; padding:1px 4px;")
+            "font-family:monospace; font-size:9pt; padding:1px 4px;")
         self._out_input.setPlaceholderText("--")
         self._out_input.setToolTip(
             "Source (in) frame for the selected keyframe.\n"
@@ -1247,19 +1460,29 @@ class CurveEditor(QWidget):
 
         BTN_ADD = (
             "QPushButton{background:#1a2a1a;border:1px solid #3ecf6e;"
-            "color:#3ecf6e;font-family:monospace;font-size:13px;padding:0 6px;}"
+            "color:#3ecf6e;font-family:monospace;font-size:11pt;padding:0 6px;}"
             "QPushButton:hover{background:#243a24;color:#5adf8e;}"
             "QPushButton:pressed{background:#161618;}"
             "QToolTip{background:#1e1e22;color:#ffffff;"
-            "border:1px solid #4a9eff;font-family:monospace;font-size:10px;}"
+            "border:1px solid #4a9eff;font-family:monospace;font-size:9pt;}"
         )
         BTN_DEL = (
             "QPushButton{background:#2a1a1a;border:1px solid #e04a4a;"
-            "color:#e04a4a;font-family:monospace;font-size:13px;padding:0 6px;}"
+            "color:#e04a4a;font-family:monospace;font-size:11pt;padding:0 6px;}"
             "QPushButton:hover{background:#3a2424;color:#ff6a6a;}"
             "QPushButton:pressed{background:#161618;}"
             "QToolTip{background:#1e1e22;color:#ffffff;"
-            "border:1px solid #4a9eff;font-family:monospace;font-size:10px;}"
+            "border:1px solid #4a9eff;font-family:monospace;font-size:9pt;}"
+        )
+        # Neutral style -- Reset is neither additive nor destructive to keypoint
+        # existence; it only resets tangents on the selected keyframe(s).
+        BTN_RESET = (
+            "QPushButton{background:#1e1e21;border:1px solid #3a3a40;"
+            "color:#c8c8cc;font-family:monospace;font-size:11pt;padding:0 6px;}"
+            "QPushButton:hover{background:#27272b;color:#e8e8ec;border-color:#4a4a52;}"
+            "QPushButton:pressed{background:#161618;border-color:#4a9eff;}"
+            "QToolTip{background:#1e1e22;color:#ffffff;"
+            "border:1px solid #4a9eff;font-family:monospace;font-size:9pt;}"
         )
 
         self._btn_add = QPushButton("+")
@@ -1278,24 +1501,62 @@ class CurveEditor(QWidget):
         self._btn_del.setStyleSheet(BTN_DEL)
         self._btn_del.setToolTip(
             "Delete the keyframe at (or near) the playhead.\n"
-            "The first and last keyframes cannot be deleted —\n"
+            "The first and last keyframes cannot be deleted --\n"
             "they define the curve's working range.\n"
             "Alternative: select keyframes and press Del.")
         self._btn_del.clicked.connect(lambda: self.canvas.delete_keyframe_at_playhead())
         ib.addWidget(self._btn_del)
 
-        sep3 = QFrame(); sep3.setFrameShape(QFrame.Shape.VLine)
-        sep3.setStyleSheet("color:#2a2a2e; margin:0 6px;")
-        ib.addWidget(sep3)
+        self._btn_reset = QPushButton("\u21ba")
+        self._btn_reset.setFixedHeight(22); self._btn_reset.setFixedWidth(28)
+        self._btn_reset.setStyleSheet(BTN_RESET)
+        self._btn_reset.setToolTip(
+            "Reset the curve to default (identity).\n"
+            "All keypoints will be deleted, leaving only the two endpoints.\n"
+            "Affects the active snapshot only; use Ctrl+Z to undo.")
+        self._btn_reset.clicked.connect(self._on_reset_curve_clicked)
+        ib.addWidget(self._btn_reset)
 
+        ib.addStretch()   # leading stretch
+
+        # ── Centre cluster: display dropdown, Y scrubber knob, separator, Interp
+        self.display_mode_combo = QComboBox()
+        self.display_mode_combo.addItems(["Frame", "TC (metadata)", "TC (fps)"])
+        self.display_mode_combo.setFixedWidth(120)
+        self.display_mode_combo.setFixedHeight(22)
+        self.display_mode_combo.setToolTip(
+            "Frame-number display mode for the Y scrubber knob to the right.\n"
+            "Shared with the viewer's display mode: changing one updates both.\n"
+            "  Frame          plain frame numbers\n"
+            "  TC (metadata)  timecode from the file's embedded SMPTE TC\n"
+            "                 (disabled when the sequence has no TC)\n"
+            "  TC (fps)       timecode computed from frame count and fps")
+        self.display_mode_combo.currentIndexChanged.connect(
+            self._on_display_mode_user_changed)
+        # Hook the popup view so clicks on disabled items surface as feedback
+        # (Qt swallows those clicks silently — see disabledModeClicked).
+        self.display_mode_combo.view().viewport().installEventFilter(self)
+        ib.addWidget(self.display_mode_combo)
+
+        self._y_knob = YKnob()
+        self._y_knob.dragStarted.connect(self._on_knob_drag_started)
+        self._y_knob.valueScrubbing.connect(self._on_knob_scrubbing)
+        self._y_knob.dragFinished.connect(self._on_knob_drag_finished)
+        ib.addWidget(self._y_knob)
+
+        sep_cluster = QFrame(); sep_cluster.setFrameShape(QFrame.Shape.VLine)
+        sep_cluster.setStyleSheet("color:#2a2a2e; margin:0 6px;")
+        ib.addWidget(sep_cluster)
+
+        # ── Interpolation control (centered) ─────────────────────────────────
         lbl_interp = QLabel("Interpolation")
-        lbl_interp.setStyleSheet("color:#6a6a72; font-size:10px;")
+        lbl_interp.setStyleSheet("color:#6a6a72; font-size:9pt;")
         ib.addWidget(lbl_interp)
 
         self._interp_combo = QComboBox()
         # Editable with a read-only line edit: lets us DISPLAY arbitrary text
         # ("Mixed") without it being a row in the popup. The popup contains only
-        # the five real modes; the user can't type (read-only) — it's just a
+        # the five real modes; the user can't type (read-only) -- it's just a
         # display surface. Styling comes from the global stylesheet.
         self._interp_combo.setEditable(True)
         self._interp_combo.lineEdit().setReadOnly(True)
@@ -1304,7 +1565,7 @@ class CurveEditor(QWidget):
         self._interp_combo.setSizeAdjustPolicy(
             QComboBox.SizeAdjustPolicy.AdjustToContents)
         # Real selectable modes only (not the legacy SMOOTH alias). No "Mixed"
-        # row — "Mixed" is shown via the line edit text when needed.
+        # row -- "Mixed" is shown via the line edit text when needed.
         self._combo_modes = [InterpMode.CONSTANT, InterpMode.LINEAR,
                              InterpMode.HERMITE, InterpMode.BEZIER, InterpMode.NATURAL]
         for m in self._combo_modes:
@@ -1316,7 +1577,26 @@ class CurveEditor(QWidget):
         self._interp_label = self._interp_combo   # back-compat references
         ib.addWidget(self._interp_combo)
 
-        ib.addStretch()   # trailing stretch — balances the leading one to center
+        # ── Tangent operation buttons ─────────────────────────────────────────
+        sep_tan = QFrame(); sep_tan.setFrameShape(QFrame.Shape.VLine)
+        sep_tan.setStyleSheet("color:#2a2a2e; margin:0 6px;")
+        ib.addWidget(sep_tan)
+
+        self._btn_break = TangentIconButton("break")
+        self._btn_break.setFixedHeight(22); self._btn_break.setFixedWidth(28)
+        self._btn_break.setStyleSheet(BTN_RESET)  # neutral styling matches ↺
+        self._btn_break.setToolTip("Break tangents (B)")
+        self._btn_break.clicked.connect(lambda: self.canvas._break_selected())
+        ib.addWidget(self._btn_break)
+
+        self._btn_auto = TangentIconButton("auto")
+        self._btn_auto.setFixedHeight(22); self._btn_auto.setFixedWidth(28)
+        self._btn_auto.setStyleSheet(BTN_RESET)
+        self._btn_auto.setToolTip("Auto tangents (U)")
+        self._btn_auto.clicked.connect(lambda: self.canvas._auto_selected())
+        ib.addWidget(self._btn_auto)
+
+        ib.addStretch()   # trailing stretch
 
         layout.addWidget(info_bar)
 
@@ -1365,6 +1645,12 @@ class CurveEditor(QWidget):
     def _update_info_bar(self):
         sel = self.canvas._selected_frames
         kps = self.canvas.curve.sorted_keypoints()
+        # Knob's value is the in_frame (Y) of the selected kp, or None when
+        # selection is empty / multi-mixed-Y. Skip refresh while a drag is in
+        # flight so the knob's live readout isn't clobbered. Knob may not yet
+        # exist during _build_ui — guard against that too.
+        if self._y_knob is not None and not self._y_knob._dragging:
+            self._refresh_knob_value(sel, kps)
         if len(sel) == 1:
             frame = next(iter(sel))
             kp = self._kp_at(kps, frame)
@@ -1388,6 +1674,150 @@ class CurveEditor(QWidget):
         self._in_input.setText("")
         self._out_input.setText("")
         self._set_combo_mode(None)
+
+    def _refresh_knob_value(self, sel, kps):
+        """Compute the knob's value from the current selection and push it.
+        Single selection: absolute source frame of the kp.
+        Multi with matching Y: absolute source frame (shared).
+        Multi with mixed Y or no selection: None ('--')."""
+        if not sel:
+            self._y_knob.set_value(None)
+            return
+        selected_kps = [kp for kp in kps if kp.out_frame in sel]
+        if not selected_kps:
+            self._y_knob.set_value(None)
+            return
+        in_vals = {round(kp.in_frame, 4) for kp in selected_kps}
+        if len(in_vals) != 1:
+            self._y_knob.set_value(None)
+            return
+        # Knob displays absolute source frame (matches viewer / Y line edit).
+        rel = next(iter(in_vals))
+        self._y_knob.set_value(self.canvas.curve.in_start + rel)
+
+    # ── Display mode + knob handlers ──────────────────────────────────────────
+
+    def _resolve_main_window(self):
+        """Walk parent chain looking for a MainWindow-like host with the
+        shared display_mode signals. Returns None if not embedded yet."""
+        w = self.parentWidget()
+        while w is not None:
+            if hasattr(w, "displayModeChanged") and hasattr(w, "set_display_mode"):
+                return w
+            w = w.parentWidget()
+        return None
+
+    def _on_display_mode_user_changed(self, _idx=None):
+        """Curve-editor dropdown change → route to MainWindow's shared state."""
+        text = self.display_mode_combo.currentText()
+        mw = self._resolve_main_window()
+        if mw is not None:
+            mw.set_display_mode(text)
+        # Even without an mw (tests), apply locally so the knob reformats.
+        self.apply_display_mode(text)
+
+    def apply_display_mode(self, mode: str):
+        """Apply a display mode received from MainWindow. Syncs combo with
+        blocked signals, then re-installs the knob formatter."""
+        if self.display_mode_combo.currentText() != mode:
+            self.display_mode_combo.blockSignals(True)
+            self.display_mode_combo.setCurrentText(mode)
+            self.display_mode_combo.blockSignals(False)
+        self._install_knob_formatter(mode)
+
+    def apply_tc_metadata_available(self, available: bool):
+        """Enable/disable the TC (metadata) entry on this combo in lockstep
+        with the viewer's combo. Selection fallback is handled by the viewer."""
+        idx = self.display_mode_combo.findText("TC (metadata)")
+        if idx < 0:
+            return
+        item = self.display_mode_combo.model().item(idx)
+        if item is not None:
+            item.setEnabled(bool(available))
+
+    def eventFilter(self, obj, event):
+        """Surface clicks on disabled display-mode items as a signal so the
+        MainWindow can post status-bar feedback. Qt would otherwise swallow
+        the click silently (no currentIndexChanged for disabled items)."""
+        from PyQt6.QtCore import QEvent
+        view = self.display_mode_combo.view()
+        if obj is view.viewport() and event.type() == QEvent.Type.MouseButtonPress:
+            idx = view.indexAt(event.position().toPoint())
+            if idx.isValid():
+                item = self.display_mode_combo.model().item(idx.row())
+                if item is not None and not item.isEnabled():
+                    self.disabledModeClicked.emit(item.text())
+        return super().eventFilter(obj, event)
+
+    def _install_knob_formatter(self, mode: str):
+        """Build a formatter that reuses the viewer's display_frame() so TC
+        formatting is single-sourced. The knob value IS the absolute source
+        frame, so we pass is_src=True (matches viewer's source-frame TC path)."""
+        mw = self._resolve_main_window()
+        viewer = getattr(mw, "viewer", None) if mw else None
+        if viewer is None or not hasattr(viewer, "display_frame"):
+            self._y_knob.set_formatter(
+                lambda v: ("--" if v is None else str(int(round(v)))))
+            return
+        def fmt(v):
+            if v is None:
+                return "--"
+            return viewer.display_frame(int(round(v)), is_src=True)
+        self._y_knob.set_formatter(fmt)
+
+    # ── Knob drag handlers ────────────────────────────────────────────────────
+
+    def _on_knob_drag_started(self):
+        """Capture pre-drag state for undo and per-kp baseline values."""
+        sel = self.canvas._selected_frames
+        kps = self.canvas.curve.sorted_keypoints()
+        self._knob_drag_baselines = {}  # id(kp) → in_frame at press
+        self._knob_drag_baseval = None  # the knob's value at press (absolute)
+        if not sel:
+            return
+        selected_kps = [kp for kp in kps if kp.out_frame in sel]
+        in_vals = {round(kp.in_frame, 4) for kp in selected_kps}
+        if not selected_kps or len(in_vals) != 1:
+            return
+        self.canvas._push_undo()
+        self._knob_drag_baseval = (
+            self.canvas.curve.in_start + next(iter(in_vals)))
+        for kp in selected_kps:
+            self._knob_drag_baselines[id(kp)] = kp.in_frame
+
+    def _on_knob_scrubbing(self, live_value: float):
+        """Apply (live_value - baseval) delta to each selected kp's in_frame."""
+        if self._knob_drag_baseval is None or not self._knob_drag_baselines:
+            return
+        delta = live_value - self._knob_drag_baseval
+        in_total = float(self.canvas._in_total())
+        kps = self.canvas.curve.sorted_keypoints()
+        for kp in kps:
+            if id(kp) in self._knob_drag_baselines:
+                base = self._knob_drag_baselines[id(kp)]
+                new_in = max(0.0, min(in_total, base + delta))
+                kp.in_frame = new_in
+        self.canvas.curveChanged.emit()
+        self.canvas.update()
+
+    def _on_knob_drag_finished(self, final_value: int):
+        """Round each selected kp's in_frame to an integer and commit."""
+        if self._knob_drag_baseval is None or not self._knob_drag_baselines:
+            return
+        delta = float(final_value) - self._knob_drag_baseval
+        in_total = float(self.canvas._in_total())
+        kps = self.canvas.curve.sorted_keypoints()
+        for kp in kps:
+            if id(kp) in self._knob_drag_baselines:
+                base = self._knob_drag_baselines[id(kp)]
+                new_in = max(0.0, min(in_total, round(base + delta)))
+                kp.in_frame = float(new_in)
+        self._knob_drag_baselines = {}
+        self._knob_drag_baseval = None
+        self.canvas.curveChanged.emit()
+        self.canvas.update()
+        # Refresh info bar so the Y line edit text catches up.
+        self._update_info_bar()
 
     def _on_interp_combo(self, index):
         """Apply the chosen mode to all selected keyframes."""
@@ -1469,3 +1899,26 @@ class CurveEditor(QWidget):
 
     def _reset(self, speed):
         self.canvas._reset(speed)
+
+    def _on_reset_curve_clicked(self):
+        """Reset button (↺) handler: modal-confirm full-curve reset.
+        Acts on the active snapshot only; per-Model-A the canvas's curve IS
+        the active snapshot's curve, so canvas._reset(1.0) is the right path
+        (it pushes undo, calls curve.reset(speed), clears selection, emits
+        curveChanged). Per-keypoint tangent reset stays on the right-click
+        menu — see _reset_tangents / _auto_selected for that path."""
+        box = QMessageBox(self)
+        box.setWindowTitle("Reset curve?")
+        box.setText("Reset curve to default? All keypoints will be deleted.")
+        box.setIcon(QMessageBox.Icon.Warning)
+        box.setStandardButtons(
+            QMessageBox.StandardButton.Cancel | QMessageBox.StandardButton.Reset)
+        box.setDefaultButton(QMessageBox.StandardButton.Cancel)
+        # Relabel Reset button so the action verb matches the title.
+        reset_btn = box.button(QMessageBox.StandardButton.Reset)
+        if reset_btn is not None:
+            reset_btn.setText("Reset")
+        if box.exec() != QMessageBox.StandardButton.Reset:
+            return
+        self.canvas._reset(1.0)
+        self._update_info_bar()

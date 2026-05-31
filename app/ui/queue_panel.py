@@ -2,6 +2,7 @@
 from __future__ import annotations
 import os
 import time
+import uuid
 from dataclasses import dataclass, field
 from typing import List, Optional
 from enum import Enum
@@ -16,10 +17,11 @@ from PyQt6.QtGui import QColor, QBrush, QPixmap, QPainter, QPen, QIcon
 
 from core.rife_runner import RifeRunner
 from core.timewarp import TimewarpCurve
+from ui.snapshot_panel import PALETTE_HEX, make_swatch_icon, make_blank_icon
 
 
 TT = ("QToolTip{background:#1e1e22;color:#ffffff;"
-      "border:1px solid #4a9eff;font-family:monospace;font-size:10px;}")
+      "border:1px solid #4a9eff;font-family:monospace;font-size:9pt;}")
 
 
 def _trash_icon(color: str = "#9a4a4a", px: int = 16) -> QIcon:
@@ -65,9 +67,11 @@ STATUS_COLORS = {
     JobStatus.ABORTED: "#f5a623",
 }
 
-COL_NAME=0; COL_IN=1; COL_OUT=2; COL_FRAMES=3; COL_SPEED=4
-COL_MODEL=5; COL_STATUS=6; COL_ETA=7; COL_TOTAL=8; COL_PROGRESS=9; COL_ACTIONS=10; N_COLS=11
-HEADERS = ["Shot","Input","Output","Frames","Avg Speed","Model","Status","ETA","Total Time","Progress",""]
+COL_NAME=0; COL_IN=1; COL_OUT=2; COL_SNAPSHOT=3
+COL_FRAMES=4; COL_SPEED=5; COL_MODEL=6; COL_STATUS=7; COL_ETA=8
+COL_TOTAL=9; COL_PROGRESS=10; COL_ACTIONS=11; N_COLS=12
+HEADERS = ["Shot","Input","Output","Snapshot",
+           "Frames","Avg Speed","Model","Status","ETA","Total Time","Progress",""]
 
 
 @dataclass
@@ -99,6 +103,15 @@ class RetimeJob:
     # Optional per-job output frame range. None = full curve range.
     frame_range_str: str          = ""
     frame_range_set: Optional[set] = None
+    # Snapshot identity captured at queue time. Frozen strings — never relinked
+    # to the live SnapshotCollection. Empty / None = no snapshot context (e.g.
+    # legacy job loaded from a pre-Brief-B project file).
+    snapshot_name:  str           = ""
+    snapshot_color: Optional[str] = None
+    # Stable per-job identity. Generated at construction and used as the lookup
+    # key for trash-button callbacks and runner signals so row-shift events
+    # (remove / clear-done) don't dispatch to the wrong job.
+    job_id:         str           = field(default_factory=lambda: uuid.uuid4().hex)
     status:         JobStatus     = JobStatus.READY
     progress:       int           = 0
     frames_done:    int           = 0
@@ -140,7 +153,7 @@ class QueuePanel(QWidget):
         toolbar.setContentsMargins(6, 4, 6, 4)
         toolbar.setSpacing(6)
 
-        BTN = ("QPushButton{font-family:monospace;font-size:10px;"
+        BTN = ("QPushButton{font-family:monospace;font-size:9pt;"
                "padding:2px 10px;height:22px;}")
 
         self.btn_add_queue = QPushButton("+ ADD TO QUEUE")
@@ -190,7 +203,7 @@ class QueuePanel(QWidget):
 
         self.summary_label = QLabel("Queue empty")
         self.summary_label.setObjectName("statusLabel")
-        self.summary_label.setStyleSheet("color:#3a3a42;font-family:monospace;font-size:10px;")
+        self.summary_label.setStyleSheet("color:#3a3a42;font-family:monospace;font-size:9pt;")
 
         toolbar.addWidget(self.btn_add_queue)
         toolbar.addWidget(self.btn_run_all)
@@ -236,6 +249,9 @@ class QueuePanel(QWidget):
         for c, w in fixed_widths.items():
             hh.setSectionResizeMode(c, QHeaderView.ResizeMode.Fixed)
             self.table.setColumnWidth(c, w)
+        # Snapshot column: interactive (user-resizable), default ~140px.
+        hh.setSectionResizeMode(COL_SNAPSHOT, QHeaderView.ResizeMode.Interactive)
+        self.table.setColumnWidth(COL_SNAPSHOT, 140)
         hh.setSectionResizeMode(COL_PROGRESS, QHeaderView.ResizeMode.Fixed)
         self.table.setColumnWidth(COL_PROGRESS, 170)
         hh.setSectionResizeMode(COL_ACTIONS, QHeaderView.ResizeMode.Fixed)
@@ -253,7 +269,7 @@ class QueuePanel(QWidget):
         self.log_header_label = QLabel("JOB LOG")
         self.log_header_label.setStyleSheet(
             "background:#111113; color:#3a3a42; font-family:monospace;"
-            "font-size:9px; letter-spacing:1px; padding:4px 8px;"
+            "font-size:8pt; letter-spacing:1px; padding:4px 8px;"
             "border-left:1px solid #2a2a2e; border-bottom:1px solid #2a2a2e;")
         self.log_header_label.setFixedHeight(24)
         log_vl.addWidget(self.log_header_label)
@@ -264,7 +280,7 @@ class QueuePanel(QWidget):
         self.log_view.setPlaceholderText("Select a job to see its log…")
         self.log_view.setStyleSheet(
             "QTextEdit{background:#0e0e0f;color:#6a6a72;font-family:monospace;"
-            "font-size:9px;border:none;border-left:1px solid #2a2a2e;padding:4px;}")
+            "font-size:8pt;border:none;border-left:1px solid #2a2a2e;padding:4px;}")
         log_vl.addWidget(self.log_view, stretch=1)
 
         h_splitter.addWidget(log_widget)
@@ -304,6 +320,23 @@ class QueuePanel(QWidget):
         self.table.setItem(row, COL_NAME,   cell(job.name))
         self.table.setItem(row, COL_IN,     cell(os.path.basename(job.in_dir.rstrip("/"))))
         self.table.setItem(row, COL_OUT,    cell(os.path.basename(job.out_dir.rstrip("/"))))
+
+        # Snapshot column — captured-at-queue name + swatch. Frozen strings; we
+        # never re-query the live SnapshotCollection from here.
+        snap_item = cell(job.snapshot_name or "")
+        if job.snapshot_color and job.snapshot_color in PALETTE_HEX:
+            snap_item.setIcon(make_swatch_icon(PALETTE_HEX[job.snapshot_color]))
+            snap_item.setToolTip(
+                f"Queued from snapshot “{job.snapshot_name}”"
+                f" (color: {job.snapshot_color})")
+        else:
+            # Reserve the icon footprint so the name's x-offset stays consistent
+            # across rows, color or not.
+            snap_item.setIcon(make_blank_icon())
+            if job.snapshot_name:
+                snap_item.setToolTip(
+                    f"Queued from snapshot “{job.snapshot_name}”")
+        self.table.setItem(row, COL_SNAPSHOT, snap_item)
         # Show custom range if set, otherwise the full in_start–in_end
         if job.frame_range_set:
             n = len(job.frame_range_set)
@@ -362,7 +395,9 @@ class QueuePanel(QWidget):
             "Remove this job from the queue.\n"
             "If the job is running, it is aborted first.\n"
             "Rendered files on disk are not deleted.")
-        btn.clicked.connect(lambda _, r=row: self._remove_job(r))
+        # Trash button keys off job_id, not row, so it deletes the correct job
+        # even after rows have shifted (remove / clear-done above this one).
+        btn.clicked.connect(lambda _, jid=job.job_id: self._remove_job_by_id(jid))
         self.table.setCellWidget(row, COL_ACTIONS, btn)
 
     def _update_summary(self):
@@ -379,6 +414,20 @@ class QueuePanel(QWidget):
             self.jobs.pop(row)
             self.table.removeRow(row)
             self._update_summary()
+
+    def _row_for_job_id(self, job_id: str) -> int:
+        for i, j in enumerate(self.jobs):
+            if j.job_id == job_id:
+                return i
+        return -1
+
+    def _remove_job_by_id(self, job_id: str):
+        """Trash-button entry point. Silently no-ops if the id is gone — e.g.
+        double-click race after the row has already been removed."""
+        row = self._row_for_job_id(job_id)
+        if row < 0:
+            return
+        self._remove_job(row)
 
     def _clear_done(self):
         for i in range(len(self.jobs) - 1, -1, -1):
@@ -437,13 +486,41 @@ class QueuePanel(QWidget):
             model_dir=job.model_dir, python_bin=job.python_bin,
         )
         job.runner = runner
-        runner.signals.progress.connect(lambda d, t, r=row: self._on_progress(r, d, t))
-        runner.signals.log.connect(lambda line, r=row: self._on_log(r, line))
-        runner.signals.finished.connect(lambda ok, msg, r=row: self._on_finished(r, ok, msg))
+        # Connect runner signals keyed on job_id, not row. Rows shift on remove
+        # / clear-done; ids don't. The _on_*_by_id dispatchers re-resolve the
+        # current row each time a signal arrives.
+        jid = job.job_id
+        runner.signals.progress.connect(lambda d, t, jid=jid: self._on_progress_by_id(jid, d, t))
+        runner.signals.log.connect(lambda line, jid=jid: self._on_log_by_id(jid, line))
+        runner.signals.finished.connect(lambda ok, msg, jid=jid: self._on_finished_by_id(jid, ok, msg))
         job.status = JobStatus.RUNNING
         self._refresh_row(row)
         self._update_summary()
         runner.start()
+
+    # ── Id-based signal dispatchers ───────────────────────────────────────────
+    # Connect runner signals to these, not the row-based helpers below. Each
+    # re-resolves the current row for `job_id` and silently no-ops when the
+    # id is gone — the runner can briefly outlive a remove/abort and its
+    # in-flight signals would otherwise write to stale rows.
+
+    def _on_progress_by_id(self, job_id: str, done: int, total: int):
+        row = self._row_for_job_id(job_id)
+        if row < 0:
+            return
+        self._on_progress(row, done, total)
+
+    def _on_log_by_id(self, job_id: str, line: str):
+        row = self._row_for_job_id(job_id)
+        if row < 0:
+            return
+        self._on_log(row, line)
+
+    def _on_finished_by_id(self, job_id: str, ok: bool, msg: str):
+        row = self._row_for_job_id(job_id)
+        if row < 0:
+            return
+        self._on_finished(row, ok, msg)
 
     def _on_progress(self, row, done, total):
         if row >= len(self.jobs): return

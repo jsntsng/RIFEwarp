@@ -12,7 +12,7 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtCore import Qt, pyqtSignal
 
-TT = "QToolTip{background:#1e1e22;color:#ffffff;border:1px solid #4a9eff;font-family:monospace;font-size:10px;}"
+TT = "QToolTip{background:#1e1e22;color:#ffffff;border:1px solid #4a9eff;font-family:monospace;font-size:9pt;}"
 SCALE_VALUES = [0.25, 0.5, 1.0, 2.0]
 SCALE_LABELS = ["0.25×  (very low VRAM)", "0.5×  (4K recommended)", "1.0×  (default)", "2.0×  (fine detail)"]
 
@@ -53,7 +53,7 @@ class SettingsPanel(QWidget):
 
         self.model_path_label = QLabel("")
         self.model_path_label.setStyleSheet(
-            "color:#6a6a72; font-size:9px; font-family:monospace;")
+            "color:#6a6a72; font-size:8pt; font-family:monospace;")
         self.model_path_label.setWordWrap(True)
         model_layout.addWidget(self.model_path_label)
 
@@ -133,7 +133,7 @@ class SettingsPanel(QWidget):
             "0.25 = use only if getting OOM on very large frames.")
         self.scale_label = QLabel("1.0×")
         self.scale_label.setFixedWidth(48)
-        self.scale_label.setStyleSheet("color:#6a6a72; font-size:10px;")
+        self.scale_label.setStyleSheet("color:#6a6a72; font-size:9pt;")
         self.scale_slider.valueChanged.connect(self._on_scale)
         scale_row.addWidget(self.scale_slider)
         scale_row.addWidget(self.scale_label)
@@ -163,7 +163,7 @@ class SettingsPanel(QWidget):
             "0.3–0.5 = recommended for most footage with cuts.\n"
             "Higher = more sensitive (more frames skipped).")
         self.scene_cut_label = QLabel("(0.0 = off)")
-        self.scene_cut_label.setStyleSheet("color:#6a6a72; font-size:10px;")
+        self.scene_cut_label.setStyleSheet("color:#6a6a72; font-size:9pt;")
         self.scene_cut_spin.valueChanged.connect(self._on_scene_cut)
         sct_row.addWidget(self.scene_cut_spin)
         sct_row.addWidget(self.scene_cut_label)

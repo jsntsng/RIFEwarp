@@ -638,7 +638,7 @@ class Scrubber(QWidget):
 
 BTN_STYLE = (
     "QPushButton{background:#1e1e21;border:1px solid #2a2a2e;"
-    "color:#8a8a92;font-family:monospace;font-size:11px;padding:0;}"
+    "color:#8a8a92;font-family:monospace;font-size:10pt;padding:0;}"
     "QPushButton:hover{background:#27272b;color:#c8c8cc;border-color:#3a3a40;}"
     "QPushButton:pressed{background:#161618;border-color:#5a5a62;}"
 )
@@ -761,7 +761,7 @@ class ValuePopup(QFrame):
         reset.setFixedHeight(20)
         reset.setStyleSheet(
             "QPushButton{background:#1e1e21;border:1px solid #3a3a40;color:#c8c8cc;"
-            "font-family:monospace;font-size:9px;padding:0 6px;border-radius:3px;}"
+            "font-family:monospace;font-size:8pt;padding:0 6px;border-radius:3px;}"
             "QPushButton:hover{border-color:#4a9eff;color:#e8e8ec;}")
         reset.setToolTip(f"Reset {title} to default")
         row.addWidget(self.slider); row.addWidget(reset)
@@ -796,7 +796,7 @@ class ValueReadout(QLabel):
         self._title = title
         self._fmt   = value_fmt
         self.setStyleSheet(
-            "color:#ffffff;font-family:monospace;font-size:11px;"
+            "color:#ffffff;font-family:monospace;font-size:10pt;"
             "background:transparent;")
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setToolTip(f"Click to adjust {title}")
@@ -816,8 +816,20 @@ class ValueReadout(QLabel):
 # ── Main sequence viewer ──────────────────────────────────────────────────────
 
 class SequenceViewer(QWidget):
-    frameChanged = pyqtSignal(int)
-    cacheUpdated = pyqtSignal(int, int)   # (cached_count, total)
+    frameChanged                    = pyqtSignal(int)
+    cacheUpdated                    = pyqtSignal(int, int)   # (cached_count, total)
+    # User picked a display mode from this viewer's dropdown. MainWindow listens
+    # and routes through its own set_display_mode (single source of truth).
+    displayModeUserChanged          = pyqtSignal(str)
+    # Fired after each _probe_timecode_for_sequence run with the new boolean.
+    # MainWindow listens and forwards via tcMetadataAvailableChanged so the curve
+    # editor's dropdown can match this viewer's enable/disable state in lockstep.
+    tcMetadataAvailableUserChanged  = pyqtSignal(bool)
+    # Fired when the user clicks a disabled item in the display-mode dropdown.
+    # Qt swallows clicks on disabled items (no currentIndexChanged), so we hook
+    # the popup view's MouseButtonPress to surface the click as feedback.
+    # Payload = the clicked item's text (e.g. "TC (metadata)").
+    disabledModeClicked             = pyqtSignal(str)
 
     LOOP_NONE = 0; LOOP_LOOP = 1; LOOP_PINGPONG = 2
 
@@ -855,7 +867,7 @@ class SequenceViewer(QWidget):
         # Match settings_panel tooltip styling for consistency across the app
         self.setStyleSheet(
             "QToolTip{background:#1e1e22;color:#ffffff;"
-            "border:1px solid #4a9eff;font-family:monospace;font-size:10px;}")
+            "border:1px solid #4a9eff;font-family:monospace;font-size:9pt;}")
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0,0,0,0); layout.setSpacing(0)
         self.canvas = ViewerCanvas()
@@ -871,7 +883,7 @@ class SequenceViewer(QWidget):
 
         # Scrubber row
         sr = QHBoxLayout(); sr.setSpacing(4)
-        _SCRUB_LBL_STYLE = "color:#a0a0aa;font-family:monospace;font-size:10px;"
+        _SCRUB_LBL_STYLE = "color:#a0a0aa;font-family:monospace;font-size:9pt;"
         self._lbl_start = QLabel("1001")
         self._lbl_end   = QLabel("1072")
         # Identical alignment / width / size policy so the two labels read as a
@@ -904,6 +916,9 @@ class SequenceViewer(QWidget):
             "                 (disabled when the sequence has no TC)\n"
             "  TC (fps)       timecode computed from frame count and fps")
         self.display_mode_combo.currentIndexChanged.connect(self._on_display_mode_changed)
+        # Hook the popup view so clicks on disabled items surface as feedback
+        # (Qt swallows those clicks silently — see disabledModeClicked).
+        self.display_mode_combo.view().viewport().installEventFilter(self)
         cr.addWidget(self.display_mode_combo)
 
         # Source / Timewarp toggle — created here, added to the layout at the far
@@ -928,7 +943,7 @@ class SequenceViewer(QWidget):
 
         # Left-cluster fps controls (label + value combo)
         fps_lbl = QLabel("fps")
-        fps_lbl.setStyleSheet("color:#4a4a52;font-size:10px;")
+        fps_lbl.setStyleSheet("color:#4a4a52;font-size:9pt;")
         # Fixed width so the centring math below matches the rendered width
         # (a bare label's sizeHint isn't reliable until fonts are realized).
         fps_lbl.setFixedWidth(24)
@@ -948,7 +963,7 @@ class SequenceViewer(QWidget):
             "Affects only in-app preview \u2014 does not change render output.")
         self.fps_combo.setStyleSheet(
             "QComboBox{background:#1e1e21;border:1px solid #2a2a2e;color:#8a8a92;"
-            "font-family:monospace;font-size:10px;padding:0 4px;}"
+            "font-family:monospace;font-size:9pt;padding:0 4px;}"
             "QComboBox:editable{background:#1e1e21;}")
         # Commit on Enter or focus-out; ignore intermediate typing
         from PyQt6.QtGui import QDoubleValidator
@@ -1010,7 +1025,7 @@ class SequenceViewer(QWidget):
             "Highlighted in amber when the playhead is at a keyframe.")
         self.frame_input.setStyleSheet(
             "background:#1e1e21;border:1px solid #3a3a40;color:#f5a623;"
-            "font-family:monospace;font-size:11px;padding:0 4px;")
+            "font-family:monospace;font-size:10pt;padding:0 4px;")
         self.frame_input.returnPressed.connect(self._on_frame_input)
 
         self.btn_play_fwd  = _btn(
@@ -1037,7 +1052,7 @@ class SequenceViewer(QWidget):
         # In/Out point editable fields — sit next to their bracket buttons
         IO_FIELD_STYLE = (
             "background:#1e1e21;border:1px solid #3a3a40;color:#6aa9ff;"
-            "font-family:monospace;font-size:10px;padding:0 4px;")
+            "font-family:monospace;font-size:9pt;padding:0 4px;")
         self.in_point_input = QLineEdit()
         self.in_point_input.setFixedWidth(100); self.in_point_input.setFixedHeight(22)
         self.in_point_input.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -1070,7 +1085,7 @@ class SequenceViewer(QWidget):
             "—  No loop: stop at the end.\n"
             "↺  Loop: restart from in point at end.\n"
             "⇄  Ping-pong: reverse direction at each end.", 28)
-        self.btn_loop.setStyleSheet(BTN_STYLE.replace("font-size:11px", "font-size:15px"))
+        self.btn_loop.setStyleSheet(BTN_STYLE.replace("font-size:10pt", "font-size:13pt"))
         self.btn_loop.clicked.connect(self._cycle_loop)
         self._update_loop_btn()
         cr.addWidget(self.btn_loop)
@@ -1155,23 +1170,23 @@ class SequenceViewer(QWidget):
     _ACTIVE_SRC = (
         "QPushButton{background:#1a2a3a;border:1px solid #4a9eff;"
         "border-right:none;color:#4a9eff;font-family:monospace;"
-        "font-size:10px;padding:0 6px;border-radius:0;}"
+        "font-size:9pt;padding:0 6px;border-radius:0;}"
     )
     _INACTIVE_SRC = (
         "QPushButton{background:#161618;border:1px solid #2a2a2e;"
         "border-right:none;color:#3a3a42;font-family:monospace;"
-        "font-size:10px;padding:0 6px;border-radius:0;}"
+        "font-size:9pt;padding:0 6px;border-radius:0;}"
         "QPushButton:hover{color:#6a6a72;}"
     )
     _ACTIVE_RET = (
         "QPushButton{background:#1a3a2a;border:1px solid #3ecf6e;"
         "color:#3ecf6e;font-family:monospace;"
-        "font-size:10px;padding:0 6px;border-radius:0;}"
+        "font-size:9pt;padding:0 6px;border-radius:0;}"
     )
     _INACTIVE_RET = (
         "QPushButton{background:#161618;border:1px solid #2a2a2e;"
         "color:#3a3a42;font-family:monospace;"
-        "font-size:10px;padding:0 6px;border-radius:0;}"
+        "font-size:9pt;padding:0 6px;border-radius:0;}"
         "QPushButton:hover{color:#6a6a72;}"
     )
 
@@ -1288,11 +1303,13 @@ class SequenceViewer(QWidget):
             item = self.display_mode_combo.model().item(idx)
             if item is not None:
                 item.setEnabled(self._tc_has_meta)
+        # Tell MainWindow so the curve editor's combo can match in lockstep.
+        self.tcMetadataAvailableUserChanged.emit(self._tc_has_meta)
         # Current mode no longer valid → fall back to Frame.
         if self._display_mode == "TC (metadata)" and not self._tc_has_meta:
             self.display_mode_combo.setCurrentText("Frame")
 
-    def _display_frame(self, frame: int, is_src: bool) -> str:
+    def display_frame(self, frame: int, is_src: bool) -> str:
         """Format a frame number according to the active display mode.
 
         is_src=True  → frame is a source frame; offset from _src_start.
@@ -1320,8 +1337,8 @@ class SequenceViewer(QWidget):
         """Refresh the start/end labels beside the scrubber for the current mode."""
         lo, hi = self.scrubber._min, self.scrubber._max
         is_src = self._mode == "SOURCE"
-        self._lbl_start.setText(self._display_frame(lo, is_src))
-        self._lbl_end.setText(self._display_frame(hi, is_src))
+        self._lbl_start.setText(self.display_frame(lo, is_src))
+        self._lbl_end.setText(self.display_frame(hi, is_src))
 
     def _fmt_field(self, frame: int) -> str:
         """Format a transport-row frame value for the active display mode.
@@ -1330,7 +1347,7 @@ class SequenceViewer(QWidget):
         output frames in RETIMED mode), so is_src tracks the mode exactly like
         _update_scrubber_labels does.
         """
-        return self._display_frame(frame, self._mode == "SOURCE")
+        return self.display_frame(frame, self._mode == "SOURCE")
 
     def _refresh_frame_fields(self):
         """Re-render the in-point / current / out-point fields for the current
@@ -1343,7 +1360,27 @@ class SequenceViewer(QWidget):
             self.out_point_input.setText(self._fmt_field(self.scrubber.outPoint()))
 
     def _on_display_mode_changed(self, _index=None):
-        self._display_mode = self.display_mode_combo.currentText()
+        # User selected a mode in THIS viewer's dropdown. Send it up to
+        # MainWindow; the round-trip via displayModeChanged will land back here
+        # in apply_display_mode(), which applies the local effects.
+        text = self.display_mode_combo.currentText()
+        self.displayModeUserChanged.emit(text)
+
+    def apply_display_mode(self, mode: str):
+        """Apply a mode change received from MainWindow's shared signal.
+        Syncs the combo text with signals blocked (no re-emit), then runs the
+        existing side-effect chain so the viewer redraws."""
+        if mode == self._display_mode:
+            # Still ensure combo text matches (initial-sync convenience).
+            if self.display_mode_combo.currentText() != mode:
+                self.display_mode_combo.blockSignals(True)
+                self.display_mode_combo.setCurrentText(mode)
+                self.display_mode_combo.blockSignals(False)
+            return
+        self._display_mode = mode
+        self.display_mode_combo.blockSignals(True)
+        self.display_mode_combo.setCurrentText(mode)
+        self.display_mode_combo.blockSignals(False)
         self._update_scrubber_labels()
         self._refresh_frame_fields()
         self._show_frame(self._current_frame)
@@ -1814,6 +1851,18 @@ class SequenceViewer(QWidget):
         from PyQt6.QtCore import QEvent
         if obj is self.canvas and event.type() == QEvent.Type.Resize:
             self._position_readouts()
+        # Display-mode combo popup: surface clicks on disabled items as a
+        # disabledModeClicked signal so MainWindow can show feedback. Qt would
+        # otherwise swallow the click silently (no currentIndexChanged).
+        view = self.display_mode_combo.view()
+        if obj is view.viewport() and event.type() == QEvent.Type.MouseButtonPress:
+            idx = view.indexAt(event.position().toPoint())
+            if idx.isValid():
+                item = self.display_mode_combo.model().item(idx.row())
+                if item is not None and not item.isEnabled():
+                    self.disabledModeClicked.emit(item.text())
+                    # Let Qt's default handling continue — it's already a no-op
+                    # for disabled items, but no need to consume the event.
         return super().eventFilter(obj, event)
 
 
