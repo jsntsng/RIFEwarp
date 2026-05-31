@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# rife_retime setup script — Rocky Linux 9/10
-# Installs everything into ~/rife_retime/ — no sudo required.
+# RIFEwarp setup script — Rocky Linux 9/10
+# Installs everything into ~/RIFEwarp/ — no sudo required.
 set -e
 
-INSTALL_DIR="$HOME/rife_retime"
+INSTALL_DIR="$HOME/RIFEwarp"
 VENV_DIR="$INSTALL_DIR/venv"
 APP_DIR="$INSTALL_DIR/app"
 RIFE_DIR="$INSTALL_DIR/rife"
@@ -12,7 +12,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 echo ""
 echo "============================================="
-echo "  RIFE Retime — Setup"
+echo "  RIFEwarp — Setup"
 echo "  Install dir: $INSTALL_DIR"
 echo "============================================="
 echo ""
@@ -57,16 +57,16 @@ cp -r "$SCRIPT_DIR/." "$APP_DIR/"
 echo "Writing launcher..."
 cat > "$LAUNCHER" << EOF
 #!/usr/bin/env bash
-INSTALL_DIR="\$HOME/rife_retime"
-export RIFE_RETIME_SCRIPT="\$INSTALL_DIR/rife/inference_img.py"
-export RIFE_RETIME_PYTHON="\$INSTALL_DIR/venv/bin/python3"
+INSTALL_DIR="\$HOME/RIFEwarp"
+export RIFEWARP_SCRIPT="\$INSTALL_DIR/rife/inference_img.py"
+export RIFEWARP_PYTHON="\$INSTALL_DIR/venv/bin/python3"
 cd "\$INSTALL_DIR/app"
 exec "\$INSTALL_DIR/venv/bin/python3" main.py "\$@"
 EOF
 chmod +x "$LAUNCHER"
 
 mkdir -p "$HOME/bin"
-ln -sf "$LAUNCHER" "$HOME/bin/rife-retime"
+ln -sf "$LAUNCHER" "$HOME/bin/rifewarp"
 
 # PATH reminder
 if [[ ":$PATH:" != *":$HOME/bin:"* ]]; then
@@ -87,5 +87,5 @@ echo "============================================="
 echo "  Setup complete."
 echo "============================================="
 echo ""
-echo "  Launch: rife-retime"
+echo "  Launch: rifewarp"
 echo ""
