@@ -17,7 +17,7 @@ animating retime speed, snapshot versioning, and timecode-aware playback.
 
 ## Requirements
 
-- Linux (developed on Rocky Linux 9 / Nobara)
+- Linux (developed on Rocky Linux 9)
 - NVIDIA GPU with CUDA support
 - Python 3.11
 - OpenImageIO 3.1.x
