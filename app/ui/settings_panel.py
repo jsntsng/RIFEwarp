@@ -4,6 +4,7 @@ Auto-detects Python bin from venv. No dead UI.
 """
 from __future__ import annotations
 import os
+import re
 import sys
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QFormLayout, QLabel, QCheckBox,
@@ -203,33 +204,75 @@ class SettingsPanel(QWidget):
         return os.path.join(self._rife_dir(), "models")
 
     def _scan_models(self):
-        """Scan models/ directory for named model folders containing flownet.pkl."""
+        """Scan models/ directory for named model folders containing flownet.pkl.
+
+        Ordering: modern versions (minor >= 10 or major > 4) ascending by
+        version, then unparsed directory names alphabetically, then a visual
+        separator, then legacy versions (minor < 10) ascending, with
+        train_log at the very bottom.  Default selection is 4.18 if present;
+        otherwise the first selectable item.
+        """
         models_dir = self._models_dir()
-        found = []
+        modern   = []  # (name, path, (major, minor)) — minor >= 10 or major > 4
+        legacy   = []  # (name, path, (major, minor)) — minor < 10
+        unparsed = []  # (name, path) — non-version directory names
+
         if os.path.isdir(models_dir):
-            for name in sorted(os.listdir(models_dir), reverse=True):
+            for name in sorted(os.listdir(models_dir)):
                 path = os.path.join(models_dir, name)
-                if os.path.isdir(path):
-                    if os.path.exists(os.path.join(path, "flownet.pkl")):
-                        found.append((name, path))
-        # Also check legacy train_log location
+                if not os.path.isdir(path):
+                    continue
+                if not os.path.exists(os.path.join(path, "flownet.pkl")):
+                    continue
+                m = re.match(r'^(\d+)\.(\d+)', name)
+                if m:
+                    major, minor = int(m.group(1)), int(m.group(2))
+                    if major > 4 or minor >= 10:
+                        modern.append((name, path, (major, minor)))
+                    else:
+                        legacy.append((name, path, (major, minor)))
+                else:
+                    unparsed.append((name, path))
+
+        # train_log always sorts last among legacy
         rife_dir = self._rife_dir()
-        legacy = os.path.join(rife_dir, "train_log")
-        if os.path.isdir(legacy) and os.path.exists(os.path.join(legacy, "flownet.pkl")):
-            found.append(("train_log (legacy)", legacy))
+        tl = os.path.join(rife_dir, "train_log")
+        if os.path.isdir(tl) and os.path.exists(os.path.join(tl, "flownet.pkl")):
+            legacy.append(("train_log (legacy)", tl, (999, 999)))
+
+        modern.sort(key=lambda x: x[2])
+        legacy.sort(key=lambda x: x[2])
 
         current = self.model_combo.currentText()
         self.model_combo.blockSignals(True)
         self.model_combo.clear()
-        for name, path in found:
+        for name, path, _ in modern:
             self.model_combo.addItem(name, path)
+        for name, path in unparsed:
+            self.model_combo.addItem(name, path)
+        if legacy:
+            self.model_combo.insertSeparator(self.model_combo.count())
+            for name, path, _ in legacy:
+                self.model_combo.addItem(name, path)
         self.model_combo.blockSignals(False)
 
-        idx = self.model_combo.findText(current)
+        # Restore prior selection; on first launch prefer 4.18.
+        # Guard: findText("") matches the separator's empty text and returns a
+        # non-negative index, causing setCurrentIndex to land on a non-selectable
+        # row and silently leave currentIndex at -1.  Only search when non-empty.
+        idx = self.model_combo.findText(current) if current else -1
         if idx >= 0:
             self.model_combo.setCurrentIndex(idx)
-        elif self.model_combo.count() > 0:
-            self.model_combo.setCurrentIndex(0)
+        else:
+            preferred = self.model_combo.findText("4.18")
+            if preferred >= 0:
+                self.model_combo.setCurrentIndex(preferred)
+            elif self.model_combo.count() > 0:
+                # Fall back to first selectable item (skip any leading separator)
+                for i in range(self.model_combo.count()):
+                    if self.model_combo.itemData(i) is not None:
+                        self.model_combo.setCurrentIndex(i)
+                        break
 
         self._on_model_selected()
 
