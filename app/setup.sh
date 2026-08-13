@@ -5,10 +5,12 @@ set -e
 
 INSTALL_DIR="$HOME/RIFEwarp"
 VENV_DIR="$INSTALL_DIR/venv"
-APP_DIR="$INSTALL_DIR/app"
-RIFE_DIR="$INSTALL_DIR/rife"
 LAUNCHER="$INSTALL_DIR/launch.sh"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SOURCE_ROOT="$(dirname "$SCRIPT_DIR")"
+RELEASE_TAG="v1.1.1"
+RELEASE_BASE="https://github.com/jsntsng/RIFEwarp/releases/download/$RELEASE_TAG"
+MODEL_VERSIONS=(4.9.2 4.18 4.22 4.25 4.26)
 
 echo ""
 echo "============================================="
@@ -17,75 +19,171 @@ echo "  Install dir: $INSTALL_DIR"
 echo "============================================="
 echo ""
 
-echo "[1/6] Creating install directory..."
-mkdir -p "$INSTALL_DIR" "$APP_DIR"
-
-echo "[2/6] Cloning ECCV2022-RIFE..."
-if [ -d "$RIFE_DIR/.git" ]; then
-    echo "      Already cloned — skipping."
-else
-    git clone https://github.com/hzwer/ECCV2022-RIFE.git "$RIFE_DIR"
+# ── [1/6] Prerequisites ────────────────────────────────────────────────────────
+echo "[1/6] Checking prerequisites..."
+_missing=()
+for _cmd in python3.11 curl unzip; do
+    command -v "$_cmd" &>/dev/null || _missing+=("$_cmd")
+done
+if [ "${#_missing[@]}" -gt 0 ]; then
+    echo ""
+    echo "  ERROR: Missing required tools: ${_missing[*]}"
+    echo "  Install with: sudo dnf install ${_missing[*]}"
+    echo ""
+    exit 1
 fi
+echo "      python3.11, curl, unzip — OK."
+echo ""
 
+# ── [2/6] Copy repo tree to install dir ───────────────────────────────────────
+echo "[2/6] Copying app files to $INSTALL_DIR..."
+mkdir -p "$INSTALL_DIR"
+if command -v rsync &>/dev/null; then
+    rsync -a \
+        --exclude='venv/' \
+        --exclude='.git/' \
+        --exclude='__pycache__/' \
+        --exclude='*.pkl' \
+        --exclude='*.pyc' \
+        "$SOURCE_ROOT/" "$INSTALL_DIR/"
+else
+    for _item in app rife VERSION launch.sh CHANGELOG.md README.md requirements.txt; do
+        _src="$SOURCE_ROOT/$_item"
+        [ -e "$_src" ] || continue
+        if [ -d "$_src" ]; then
+            cp -r "$_src" "$INSTALL_DIR/"
+        else
+            cp "$_src" "$INSTALL_DIR/"
+        fi
+    done
+    find "$INSTALL_DIR" -name '__pycache__' -type d -exec rm -rf {} + 2>/dev/null || true
+    find "$INSTALL_DIR" -name '*.pyc' -delete 2>/dev/null || true
+fi
+chmod +x "$LAUNCHER"
+echo "      Done."
+echo ""
+
+# ── [3/6] Python venv ─────────────────────────────────────────────────────────
 echo "[3/6] Creating Python venv..."
 if [ -d "$VENV_DIR" ]; then
     echo "      Venv already exists — skipping."
 else
     python3.11 -m venv "$VENV_DIR"
 fi
+echo ""
 
+# ── [4/6] Install Python dependencies ─────────────────────────────────────────
+echo "[4/6] Installing Python dependencies..."
 VENV_PY="$VENV_DIR/bin/python3"
 VENV_PIP="$VENV_DIR/bin/pip"
 "$VENV_PIP" install --upgrade pip --quiet
 
-echo "[4/6] Installing PyQt6..."
+echo "      PyQt6..."
 "$VENV_PIP" install PyQt6 --quiet
-echo "      PyQt6 installed."
 
-echo "[5/6] Installing RIFE + ML dependencies..."
+echo "      PyTorch (CUDA 12.6)..."
 "$VENV_PIP" install \
     torch torchvision \
     --index-url https://download.pytorch.org/whl/cu126 \
     --quiet
+
+echo "      ML / image dependencies..."
 "$VENV_PIP" install numpy opencv-python-headless openimageio sk-video tqdm --quiet
+
 echo "      PyTorch: $("$VENV_PY" -c 'import torch; print(torch.__version__)')"
 echo "      CUDA available: $("$VENV_PY" -c 'import torch; print(torch.cuda.is_available())')"
+echo ""
 
-echo "[6/6] Copying app source..."
-cp -r "$SCRIPT_DIR/." "$APP_DIR/"
+# ── [5/6] Download RIFE model weights ─────────────────────────────────────────
+echo "[5/6] Downloading RIFE model weights..."
+MODELS_DIR="$INSTALL_DIR/rife/models"
+_WGTS_TMP="$(mktemp -d)"
+trap 'rm -rf "$_WGTS_TMP"' EXIT
 
-echo "Writing launcher..."
-cat > "$LAUNCHER" << EOF
-#!/usr/bin/env bash
-INSTALL_DIR="\$HOME/RIFEwarp"
-export RIFEWARP_SCRIPT="\$INSTALL_DIR/rife/inference_img.py"
-export RIFEWARP_PYTHON="\$INSTALL_DIR/venv/bin/python3"
-cd "\$INSTALL_DIR/app"
-exec "\$INSTALL_DIR/venv/bin/python3" main.py "\$@"
-EOF
-chmod +x "$LAUNCHER"
+for _VERSION in "${MODEL_VERSIONS[@]}"; do
+    _dest="$MODELS_DIR/$_VERSION"
+    _pkl="$_dest/flownet.pkl"
+
+    if [ -f "$_pkl" ]; then
+        echo "      $_VERSION — already present, skipping."
+        continue
+    fi
+
+    mkdir -p "$_dest"
+    _url="$RELEASE_BASE/flownet-${_VERSION}.zip"
+    _tmpzip="$_WGTS_TMP/flownet-${_VERSION}.zip"
+
+    echo "      $_VERSION — downloading..."
+    if ! curl -L --fail --silent --show-error -o "$_tmpzip" "$_url"; then
+        echo ""
+        echo "  ERROR: Download failed for model $_VERSION"
+        echo "         URL: $_url"
+        echo ""
+        exit 1
+    fi
+
+    if [ ! -s "$_tmpzip" ]; then
+        echo ""
+        echo "  ERROR: Downloaded archive is empty for model $_VERSION"
+        echo "         URL: $_url"
+        echo ""
+        exit 1
+    fi
+
+    echo "      $_VERSION — extracting flownet.pkl..."
+    if ! unzip -j -o -q "$_tmpzip" "*flownet.pkl" -d "$_dest"; then
+        echo ""
+        echo "  ERROR: Extraction failed for model $_VERSION"
+        echo ""
+        exit 1
+    fi
+
+    if [ ! -s "$_pkl" ]; then
+        echo ""
+        echo "  ERROR: flownet.pkl missing or empty after extraction for model $_VERSION"
+        echo ""
+        exit 1
+    fi
+
+    rm -f "$_tmpzip"
+    echo "      $_VERSION — OK ($(du -sh "$_pkl" | cut -f1))."
+done
+echo ""
+
+# ── [6/6] Shortcuts and desktop entry ─────────────────────────────────────────
+echo "[6/6] Installing shortcuts..."
 
 mkdir -p "$HOME/bin"
 ln -sf "$LAUNCHER" "$HOME/bin/rifewarp"
+echo "      ~/bin/rifewarp -> $LAUNCHER"
+
+_DESKTOP_DIR="$HOME/.local/share/applications"
+mkdir -p "$_DESKTOP_DIR"
+cat > "$_DESKTOP_DIR/rifewarp.desktop" << DESKTOP_EOF
+[Desktop Entry]
+Name=RIFEwarp
+Comment=RIFE-powered timewarp tool
+Exec=$LAUNCHER
+Terminal=false
+Type=Application
+Categories=Graphics;Video;
+DESKTOP_EOF
+echo "      $_DESKTOP_DIR/rifewarp.desktop"
+echo ""
 
 # PATH reminder
 if [[ ":$PATH:" != *":$HOME/bin:"* ]]; then
-    echo ""
     echo "  Add ~/bin to PATH — add this to ~/.bashrc:"
     echo "    export PATH=\"\$HOME/bin:\$PATH\""
     echo "  Then: source ~/.bashrc"
+    echo ""
 fi
 
-echo ""
-echo "============================================="
-echo "  IMPORTANT: Download the pretrained model"
-echo "============================================="
-echo "  https://github.com/hzwer/ECCV2022-RIFE"
-echo "  Unzip into: $RIFE_DIR/train_log/"
-echo ""
 echo "============================================="
 echo "  Setup complete."
-echo "============================================="
 echo ""
-echo "  Launch: rifewarp"
+echo "  Install dir:  $INSTALL_DIR"
+echo "  Launch:       rifewarp   (or ~/bin/rifewarp)"
+echo "  Desktop:      $_DESKTOP_DIR/rifewarp.desktop"
+echo "============================================="
 echo ""
