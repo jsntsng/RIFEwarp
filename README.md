@@ -26,7 +26,7 @@ animating retime speed, snapshot versioning, and timecode-aware playback.
 
 ```
 git clone https://github.com/jsntsng/RIFEwarp.git
-cd RIFEwarp
+cd RIFEwarp/app
 ./setup.sh
 ```
 
