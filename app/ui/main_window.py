@@ -395,8 +395,15 @@ class MainWindow(QMainWindow):
         # a sequence change must never destroy user curve data, even when the
         # new range is smaller and some keypoints end up off-canvas. They
         # persist in snap.curve.keypoints and reappear if the range widens.
+        # Exception: a curve that's still the unedited default (created at
+        # app init from the io_panel fallback range) is rebuilt as a fresh
+        # 1:1 identity curve spanning the newly loaded sequence, instead of
+        # keeping the stale default span.
         for snap in self.snapshots.snapshots:
-            snap.curve.set_range(in_start, in_end, in_start)
+            if snap.curve.is_untouched_default():
+                snap.curve.reset_to_identity(in_start, in_end, in_start)
+            else:
+                snap.curve.set_range(in_start, in_end, in_start)
 
         if range_changed:
             self.curve_editor.canvas.reset_view()

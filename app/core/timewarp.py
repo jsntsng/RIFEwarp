@@ -105,6 +105,24 @@ class TimewarpCurve:
         self.in_end    = in_end
         self.out_start = out_start
 
+    def is_untouched_default(self) -> bool:
+        """True if this curve is still the unedited 1:1 identity curve created
+        by _init_default() for the *current* in_start/in_end — i.e. no
+        keypoint has ever been added, moved, or retimed by the user."""
+        if len(self.keypoints) != 2:
+            return False
+        first, last = self.keypoints
+        span = self.in_end - self.in_start
+        return (first.out_frame == 0 and first.in_frame == 0
+                and last.out_frame == last.in_frame == float(span))
+
+    def reset_to_identity(self, in_start: int, in_end: int, out_start: int = 1001):
+        """Re-range and rebuild as a fresh 1:1 identity curve spanning the new
+        range. Used when a still-untouched default curve should track a newly
+        loaded sequence's length rather than keep the old default span."""
+        self.set_range(in_start, in_end, out_start)
+        self._init_default()
+
     @property
     def out_frame_count(self) -> int:
         if not self.keypoints:
