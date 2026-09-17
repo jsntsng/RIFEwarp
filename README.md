@@ -5,12 +5,14 @@ Desktop application for VFX retiming of image sequences. Draw a timewarp curve
 synthesize sub-frame interpolations. Integer-aligned frames are copied directly;
 fractional positions are AI-interpolated at a precise blend ratio.
 
+![RIFEwarp interface](docs/images/screenshot.png)
+
 Built on PyQt6 and PyTorch. Tested on Rocky Linux 9 with an RTX 4090.
 
 ## Features
 
 - Interactive timewarp curve editor with five interpolation modes (Constant,
-  Linear, Hermite, Bezier, Natural) and per-keypoint weighted breakable tangent handles
+  Linear, Hermite, Bezier, Natural)
 - Dope sheet timeline view of the same curve
 - Scrubable image sequence viewer with frame / SMPTE timecode display
 - Named snapshot variants per project — compare multiple retimes within one file
@@ -70,10 +72,10 @@ Five RIFE 4.x versions ship as release assets and are downloaded automatically:
 | Version | Notes |
 |---------|-------|
 | 4.9.2   | Earlier HDv3 generation; lightest weights (~20 MB) |
-| 4.18    | Improved HDv3 (~22 MB) |
-| 4.22    | Larger network, better on complex motion (~39 MB) |
-| 4.25    | Further refinement (~23 MB) |
-| 4.26    | Current recommended default (~23 MB) |
+| 4.18    | **Recommended** — strong on live-action with complex motion (~22 MB) |
+| 4.22    | **Recommended** — larger network, best on difficult motion/crossovers (~39 MB) |
+| 4.25    | Newer, but can artifact on complex live-action; test before production use (~23 MB) |
+| 4.26    | Newer, but can artifact on complex live-action; test before production use (~23 MB) |
 
 Select the active model in the Settings panel. You can also point to a custom
 model directory if you have a version not bundled here.
