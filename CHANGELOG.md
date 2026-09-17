@@ -4,6 +4,17 @@ All notable changes to RIFEwarp are documented in this file. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.3] - 2026-09-17
+
+### Fixed
+- Default curve span now tracks the loaded sequence length instead of the
+  app-init fallback range. `TimewarpCurve.is_untouched_default` and
+  `reset_to_identity` (`core/timewarp.py`) detect an unedited default curve
+  and rebuild it as a 1:1 identity curve spanning the newly loaded sequence.
+
+### Added
+- Roadmap document (`overview.md`).
+
 ## [1.1.1] — 2026-05-30
 
 ### Added — Curve editor top bar
