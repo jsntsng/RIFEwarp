@@ -8,7 +8,7 @@ VENV_DIR="$INSTALL_DIR/venv"
 LAUNCHER="$INSTALL_DIR/launch.sh"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SOURCE_ROOT="$(dirname "$SCRIPT_DIR")"
-RELEASE_TAG="v1.1.1"
+RELEASE_TAG="weights"
 RELEASE_BASE="https://github.com/jsntsng/RIFEwarp/releases/download/$RELEASE_TAG"
 MODEL_VERSIONS=(4.9.2 4.18 4.22 4.25 4.26)
 

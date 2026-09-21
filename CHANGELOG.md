@@ -4,6 +4,13 @@ All notable changes to RIFEwarp are documented in this file. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.5] - 2026-09-21
+
+### Fixed
+- `app/setup.sh` now downloads model weights from the permanent `weights`
+  release instead of the `v1.1.1` release tag, whose asset URLs returned 404
+  and broke fresh installs. Weights are decoupled from app version tags.
+
 ## [1.1.4] - 2026-09-21
 
 ### Changed
