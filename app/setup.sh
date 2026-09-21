@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# RIFEwarp setup script — Rocky Linux 9/10
+# RIFEwarp setup script — supports Rocky Linux 9/10 and Ubuntu 22.04/24.04
 # Installs everything into ~/RIFEwarp/ — no sudo required.
 set -e
 
@@ -21,6 +21,16 @@ echo ""
 
 # ── [1/6] Prerequisites ────────────────────────────────────────────────────────
 echo "[1/6] Checking prerequisites..."
+
+# Detect package manager (apt checked first, then dnf)
+if command -v apt-get &>/dev/null; then
+    PKG_HINT="apt"
+elif command -v dnf &>/dev/null; then
+    PKG_HINT="dnf"
+else
+    PKG_HINT="unknown"
+fi
+
 _missing=()
 for _cmd in python3.11 curl unzip; do
     command -v "$_cmd" &>/dev/null || _missing+=("$_cmd")
@@ -28,11 +38,67 @@ done
 if [ "${#_missing[@]}" -gt 0 ]; then
     echo ""
     echo "  ERROR: Missing required tools: ${_missing[*]}"
-    echo "  Install with: sudo dnf install ${_missing[*]}"
+    case "$PKG_HINT" in
+        dnf)
+            echo "  Install with: sudo dnf install ${_missing[*]}"
+            ;;
+        apt)
+            echo "  Install with: sudo apt install ${_missing[*]}"
+            if [[ " ${_missing[*]} " == *" python3.11 "* ]]; then
+                echo ""
+                echo "  python3.11 is not in the default Ubuntu repos — add the deadsnakes PPA first:"
+                echo "    sudo add-apt-repository ppa:deadsnakes/ppa"
+                echo "    sudo apt update"
+                echo "    sudo apt install python3.11 python3.11-venv"
+            fi
+            ;;
+    esac
     echo ""
     exit 1
 fi
 echo "      python3.11, curl, unzip — OK."
+
+# venv/ensurepip capability (Debian/Ubuntu split it into python3.11-venv)
+if ! python3.11 -m ensurepip --version >/dev/null 2>&1; then
+    echo ""
+    echo "  ERROR: python3.11 cannot create virtual environments (ensurepip unavailable)."
+    case "$PKG_HINT" in
+        apt)
+            echo "  Install with: sudo apt install python3.11-venv"
+            ;;
+        dnf)
+            echo "  This is unexpected on dnf systems — check your python3.11 installation."
+            ;;
+    esac
+    echo ""
+    exit 1
+fi
+echo "      python3.11 venv support — OK."
+
+# Qt xcb runtime library (warn only — headless/CI installs are legitimate)
+_have_xcb_cursor=0
+if command -v ldconfig &>/dev/null && ldconfig -p 2>/dev/null | grep -q 'libxcb-cursor\.so\.0'; then
+    _have_xcb_cursor=1
+else
+    for _dir in /usr/lib64 /usr/lib /usr/lib/x86_64-linux-gnu /usr/lib/aarch64-linux-gnu /lib64 /lib/x86_64-linux-gnu; do
+        if [ -e "$_dir/libxcb-cursor.so.0" ]; then
+            _have_xcb_cursor=1
+            break
+        fi
+    done
+fi
+if [ "$_have_xcb_cursor" -eq 1 ]; then
+    echo "      libxcb-cursor — OK."
+else
+    echo ""
+    echo "  WARNING: libxcb-cursor.so.0 not found. The app may fail to launch with"
+    echo "           \"could not load the Qt platform plugin xcb\"."
+    case "$PKG_HINT" in
+        apt) echo "           Install with: sudo apt install libxcb-cursor0" ;;
+        dnf) echo "           Install with: sudo dnf install xcb-util-cursor" ;;
+        *)   echo "           Install the libxcb-cursor package for your distro." ;;
+    esac
+fi
 echo ""
 
 # ── [2/6] Copy repo tree to install dir ───────────────────────────────────────

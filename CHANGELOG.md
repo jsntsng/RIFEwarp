@@ -4,6 +4,16 @@ All notable changes to RIFEwarp are documented in this file. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.4] - 2026-09-21
+
+### Changed
+- `app/setup.sh` prerequisite check is now distro-aware (Rocky Linux 9/10 and
+  Ubuntu 22.04/24.04). Detects apt vs dnf and prints the matching install
+  hints, including the deadsnakes PPA and `python3.11-venv` guidance on apt.
+- Added an `ensurepip` probe that catches a missing `python3.11-venv` package.
+- Added a non-fatal warning when `libxcb-cursor.so.0` is absent (Qt xcb
+  platform plugin may fail to load).
+
 ## [1.1.3] - 2026-09-17
 
 ### Fixed
